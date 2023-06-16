@@ -1,0 +1,29 @@
+baseURL = "https://nino.work"
+languageCode = "zh-cn"
+title = "Nino Work"
+theme = "github-style"
+googleAnalytics = "UA-123456-789"
+pygmentsCodeFences = true
+pygmentsUseClasses = true
+
+[params]
+  author = "C"
+  description = "In solitude, where we are least alone."
+  github = "cza14h"
+#  facebook = "MeiK2333"
+#  twitter = "MeiK2333"
+#  linkedin = "MeiK2333"
+#  instagram = "MeiK2333"
+#  tumblr = "MeiK2333"
+  email = "ziao.chen1995@gmail.com"
+  url = "https://nino.work"
+  keywords = "blog, google analytics"
+ # rss = true
+  lastmod = true
+  favicon = "/images/github.png"
+  location = "China"
+  userStatusEmoji = "😀"
+
+
+[frontmatter]
+  lastmod = ["lastmod", ":fileModTime", ":default"]
