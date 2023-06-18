@@ -2,9 +2,10 @@ baseURL = "https://nino.work"
 languageCode = "zh-cn"
 title = "Nino Work"
 theme = "github-style"
-googleAnalytics = "UA-123456-789"
+# googleAnalytics = "UA-123456-789"
 pygmentsCodeFences = true
 pygmentsUseClasses = true
+summaryLength = 10
 
 [params]
   author = "C"
