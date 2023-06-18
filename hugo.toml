@@ -21,7 +21,7 @@ summaryLength = 10
   keywords = "blog, google analytics"
  # rss = true
   lastmod = true
-  favicon = "/images/github.png"
+  favicon = "/images/favicon.png"
   location = "China"
   userStatusEmoji = "😀"
 
