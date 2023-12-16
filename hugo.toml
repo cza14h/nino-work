@@ -24,7 +24,16 @@ summaryLength = 10
   favicon = "/images/favicon.png"
   location = "China"
   userStatusEmoji = "😀"
-
+  
+[markup.highlight]
+      codeFences = true
+      guessSyntax = true
+      hl_Lines = ""
+      lineNoStart = 1
+      lineNos = true
+      lineNumbersInTable = true
+      tabWidth = 2
+      noClasses = false
 
 [frontmatter]
   lastmod = ["lastmod", ":fileModTime", ":default"]
