@@ -144,42 +144,25 @@ __修改源码__
 
 在默认的`@redux/toolkit`中, 并没有实现上述功能, 于是需要**修改源码**, 让`immer`在`reducer`执行时记录差分补丁. `immer`作用的区域是`createReducer.ts`这个文件, 首先需要在其引入模块部分开启补丁模式. 而`createReducer.ts`会被`createSlice.ts`文件引用，同时为了保证改造后的类型推断完整， `creatReducer.ts`中的类型涉及到文件也要修改，经排查只有`mapBuilders.ts`, 也会被`createSlice.ts`引用
 
-RTK的源码拆分比较灵活，我们可以通过实现自己的`createSlice`等接口来替换原本的功能，做到最小程度的改动
+RTK的源码拆分比较灵活，我们可以通过实现自己的`createSlice` `createReducer`等接口来替换原本的功能，做到最小程度的改动
+> 本文基于`@reduxjs/toolkit@1.8.6`版本进行改造，后续官方包更新可能会导致不可用，但几率不大
+
+1. 首先开启`immer`相关的api, 把需要定义的类型也导入
 ```diff
-/* createSlice.ts */
+/* createReducer.ts */
 - import type { Draft } from 'immer'
 - import createNextState, { isDraft, isDraftable, enableES5 } from 'immer'
 + import type { Draft, Patch } from 'immer'
 + import createNextState, { isDraft, isDraftable, enableES5, enablePatches } from 'immer'
-import type { AnyAction, Action, Reducer } from 'redux'
-```
-在创建`slice`的过程中, 单个`reducer`也可以通过对象的形式进行注册声明, 于是此处拟定额外传递一个`patch`回调作为第三个可选配置, 接受参数为`patches`, `inversePatches` 和 `action`, 改造后的目标(以RTK官网的createSlice)如下
-```diff
-import { createSlice, nanoid } from '@reduxjs/toolkit'
-
-const todosSlice = createSlice({
-  name: 'todos',
-  initialState: [],
-  reducers: {
-    addTodo: {
-      reducer: (state, action) => {
-        state.push(action.payload)
-      },
-      prepare: (text) => {
-        const id = nanoid()
-        return { payload: { id, text } }
-      },
-+     patch:(patches, inversePatches, action) => {
-+       //...
-+     }
-    },
-  },
-})
+  import type { AnyAction, Action, Reducer } from 'redux'
+...
++ enablePatches();
 
 ```
 
 
-- __历史记录栈__
 
-  - `immer`产生的`pathes`需要按照顺序进行存储 ，通过维护一个全局栈来实现， 并且需要用一个值来记录当前的回退位置。
-  - 通常来说，只有在产生新操作记录的时候才会对当前栈进行切分， 舍弃记录位置之后的所有`patches`
+### 历史记录栈
+- `immer`产生的`pathes`需要按照顺序进行存储 ，通过维护一个全局栈来实现， 并且需要用一个值来记录当前的回退位置。
+- 通常来说，只有在产生新操作记录的时候才会对当前栈进行切分， 舍弃记录位置之后的所有`patches`
+

@@ -1,1 +1,2 @@
-serve -s public
+# serve -s public
+serve  public
