@@ -5,6 +5,9 @@ draft: false
 tags:
   - frontend
   - react
+  - immer
+  - redux
+  - zustand
 ---
 
 ## 提要与背景
@@ -17,9 +20,9 @@ tags:
 
 ## 前置知识
 
-通常情况下实现数据可逆有两种方式: **快照与差分**.
+这个需求按功能模块可以划分为， 数据可逆模块 + 历史栈展现模块。  通常情况下实现数据可逆有两种方式: **快照与差分**.
 ### 快照
-快照的思想十分简单, 直接将执行后的完整状态作为数据推入栈, 由于每一条记录都包含了编辑器上所有组件完整的状态, 栈中相邻两条记录可以是相互独立的没有耦合, 所以状态之间的切换可以是跳跃的 (可以直接从状态2回到状态4而不考虑中间有多少个状态), 回溯状态的计算量不会随着记录跳跃距离而增长.
+快照的思想很容易理解, 直接将执行后的完整状态作为数据推入栈, 由于每一条记录都包含了应用上所有组件完整的状态, 栈中相邻两条记录可以是相互独立的没有耦合, 所以状态之间的切换可以是跳跃的 (可以直接从状态2回到状态4而不考虑中间有多少个状态), 回溯状态的计算量不会随着记录跳跃距离而增长.
   ![快照](/post/immer/snapshot.png)
   <!-- <img src="/post/immer/snapshot.png" /> -->
 
@@ -44,8 +47,130 @@ tags:
 
 差分更新的单条记录的量不会过大, 且补丁独立于状态库单独存储, 但仍然受到修改程度影响, 所以当一次性修改很多属性的时候, 补丁的大小也会等量的增长, 所以在性能方面仍然不及使用不可变库模式下的快照. 其优势主要体现在与序列化开销上, 因为就算是不可变库加持下的快照回溯, 其优势只能体现在单个js运行环境中, 一旦涉及到与后端交互的撤销逻辑时(比如实时保存), 快照的模式决定了它将回到深拷贝方式, 当进行序列化通信的时候, 没有了js环境, 所有的数据回归到字符串, 实现方式只能回归到深拷贝的`JSON.stringify`, 原来的内存占用过大问题转化为请求体过大问题. 而差分补丁的方式则是最大程度上减少请求体里所携带的信息.<br />
 
+## 浅读一个基于快照的撤销与重做
+
+因为快照的存储方式比较常见，社区里也有不少基于快照的解决方案，不需要重复造轮子了，看一下`zustand`官方推荐的`zundo`中间件是怎么实现撤销回溯的
+![zundo](/post/immer/zundo.png)
+
+0. 简单描述下`zustand`，可以理解成一个不需要写`actionType`的版本的`hooks`风格的`redux`
+```tsx
+import { create } from 'zustand'
+
+const useBearStore = create((set) => ({
+  bears: 0,
+  increasePopulation: () => set((state) => ({ bears: state.bears + 1 })),
+  removeAllBears: () => set({ bears: 0 }),
+}))
+
+const FC = () => {
+  return (
+    <div onClick={useBearStore((state) => state.increasePopulation)}>
+      {useBearStore((state) => state.bears)}
+    </div>
+  )
+}
+```
+
+#### 从入口文件开始
+1.  首先实现了`zustand`中间件的注册方法，拦截了使用了该中间件的`store`（__下文统称外部实例__）的`set`和`setState`方法，使其额外执行一系列记录外部实例状态变更的操作， 这里就可以看到，`zundo`通过调用传入的`store`的`get`方法，拿到了外部实例的全部/部分（通过传入回调实现）的快照
+```ts
+    /**
+     * 修改了注释便于阅读
+     * @see https://github.com/charkour/zundo/blob/84e27b84e6e1fb343754480b28af450a1de67a9f/src/index.ts#L58
+     * */
+    const setState = store.setState; // 缓存原来的`setState`,因为也会有其他中间件修改store的setState方法
+    store.setState = (...args) => {
+      // 这里拿到更新前的仓库状态
+      // zundo的配置支持传入预处理方法只对部分状态进行追踪，否则默认追踪当前仓库的所有状态
+      const pastState = options?.partialize?.(get()) || get();
+      // 执行仓库更新
+      setState(...args);
+      // 记录状态的主入口，注意这里的调用时机必须在状态更新后
+      curriedHandleSet(pastState);
+    };
+
+     return config(
+      //和上面的setState方法是一样的
+      (...args) => {
+        const pastState = options?.partialize?.(get()) || get();
+        set(...args);
+        curriedHandleSet(pastState);
+      },
+      get,
+      store,
+    );
+
+```
+2. `zundo`内部也是一个单独的`zustand`状态仓库，调用了`zustand`的`createStore`创建了一份实例（__下文统称内部实例__），用来保存状态快照，以及对应的操作状态的方法。中间件初始化时会传递外部实例的`set`/`get` 给到内部实例的方法，形成闭包调用，这样内部实例在执行撤销重做时就能反过来调用外部实例的`set`把对应状态再设置回去
+
+**所以这里看似是状态回溯，实则是把一个以前的快照以一个新的`setState`的形式提交更新**
+
+内部实例对外暴露的状态定义, 以`_`为开头定义的属性/方法标识该成员仅中间件内部逻辑使用，不应该暴露给上层开发者：
+```ts
+/**
+ * @description 调整了顺序
+ * @see https://github.com/charkour/zundo/blob/84e27b84e6e1fb343754480b28af450a1de67a9f/src/temporal.ts#L14
+ * */
+return {
+  // 可以通过中间件设置配置初始撤销/回溯的快照数据，或许可以用来做多应用同步，或者持久化存储的回填？
+  pastStates: options?.pastStates || [],
+  futureStates: options?.futureStates || [],
+  // 相当于enable, 一个开关状态用于控制是否记录快照， 通过`pause`和`resume`来切换
+  isTracking: true,
+  pause: () => set({ isTracking: false }),
+  resume: () => set({ isTracking: true }),
+  // 对外暴露的撤销与重做方法，主要配合`pastStates`和`futureStates`实现了时间回溯
+  undo: (step = 1) => {/**/},
+  redo: (step = 1) => {/**/},
+  // 重置内部仓库状态
+  clear: () => set({ pastStates: [], futureStates: [] }),
+  // 设置可选的持久化相关的接口，默认不会启用
+  setOnSave: (_onSave) => set({ _onSave }),
+  // 默认初始化从配置中读取save方法， 也可以通过 `setOnSave` 异步地更新
+  _onSave: options?.onSave, 
+  //...
+}
+
+```
+在入口文件注册中间件时的 `curriedHandleSet` 就指向的`zundo`内部实例的 `_handleSet`方法，在·1·中的`set`方法里最后一个调用，如此可通过使用`userGet`就能获取到最新的外部实例状态
+
+```ts
+export const temporalStateCreator = <TState>(
+  userSet: StoreApi<TState>['setState'],
+  userGet: StoreApi<TState>['getState'],
+  options?: ZundoOptions<TState>,
+) => {
+  const stateCreator: StateCreator<_TemporalState<TState>, [], []> = (set, get) => {
+    return {
+      //...
+      _handleSet: (pastState) => {
+        if (get().isTracking) {
+          const currentState = options?.partialize?.(userGet()) || userGet();
+          // 支持以计算出的差分补丁作为历史栈`pastStates`数据
+          const deltaState = options?.diff?.(pastState, currentState);
+          // 支持自定义相等运算方法
+          if (!(options?.equality?.(pastState, currentState) || deltaState === null)) {
+            // 支持设置历史栈`pastStates`最大容量, 溢出后将丢弃最旧的数据，默认容量无上限
+            if (options?.limit && get().pastStates.length >= options?.limit) {
+              get().pastStates.shift();
+            }
+            get()._onSave?.(pastState, currentState);
+            set({
+              pastStates: get().pastStates.concat(deltaState || pastState),
+              futureStates: [],
+            });
+          }
+        }
+    }
+  }
+}
+
+
+```
+
+
 ---
-## 功能设计
+## 实现一个基于差分补丁的撤销与重做
 
 撤销与重做设计思想类似命令模式, 开发者事先注册好确定的指令, 赋予这些指令功能的同时还能够同步记录一些其他运行时的元数据, 在用户交互(执行命令)的同时, 将命令推入栈中方便程序作后续处理亦或者在满足某些条件的情况下丢弃.
 
@@ -56,10 +181,13 @@ tags:
 
 ### 补丁数据
 
-撤销重做的核心就是正向与逆向的补丁数据，常用的不可变库`immer`，其实就提供了这个记录补丁数据的能力， 包括正向与逆向， 只是该功能默认不开启。而`RTK`对`redux`的封装正是基于`immer`来实现的
+撤销重做的核心就是正向与逆向的补丁数据，在每次修改`state`后，可以通过类似`microdiff`这类的库，通过交换顺序对前后两个状态之间进行计算正向与反向的`patch`, 这样的设计需要侵入并拦截状态管理库的数据的`setter`过程，例如传统的`redux`则就需要在每个`reducer`中显式的实现，就没有那么优雅
+
+好消息是，常用的不可变库`immer`，其实就提供了这个记录补丁数据的能力， 包括正向与逆向， 只是该功能默认不开启。而`RTK`对`redux`的封装正是基于`immer`来实现的
 
 >显式地开启补丁功能[官方文档](https://immerjs.github.io/immer/patches/). 
 ```javascript
+// version 6
 import { enablePatches } from 'immer'
 
 enablePatches();
@@ -67,7 +195,7 @@ enablePatches();
 开启后即可在`produce`方法中,传入一个回调作为第三个参数, 该回调将会获得`produce`执行过程中对`draft`对象所修改的所有行为的补丁, 以`patches`标注为正向补丁, `inversePatches`标注为反向回溯补丁, 同时`immer`还提供了使用补丁的方法`applyPatches`来应用刚刚输出的正反向补丁
 
 
-同时`immer`也提供了对`正向/逆向补丁`的工具函数`applyPatches`:
+同时`immer`也提供了应用补丁的工具函数`applyPatches`:
 ```javascript
 import produce, { applyPatches } from 'immer';
 
