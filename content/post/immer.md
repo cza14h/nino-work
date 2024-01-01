@@ -1,5 +1,5 @@
 ---
-title: 基于immer的RTK撤销与重做
+title: 前端撤销与重做的探索
 date:  2021-11-22T23:15:28+08:00
 draft: false
 tags:
@@ -44,7 +44,7 @@ tags:
 ### 差分补丁
 差分补丁主要关注于每两次之间的状态差分, 需要在状态转移时, 生成相应的正向与反向补丁, 这两种补丁保证了两个状态之间的来回切换而不需要保存完整的状态信息. 
 
-- 差分补丁的结构设计可以参照[`JsonPatch`](https://jsonpatch.com/), 通过类似`op`的字段来将增删改的操作转化为数据载荷
+- 差分补丁的结构设计可以参照[`JsonPatch`](https://jsonpatch.com/), 通过类似`op`的字段来标识增删改的操作
 
 - 一种更暴力的方式就是对每个操作入口进行收敛, 人为的去提取信息并作记录编写对应的正逆向补丁,对于动态程度比较高（例如传key value的反射取值）写出来的代码就会比较难看了
 
@@ -58,9 +58,10 @@ tags:
 ### 浅读一个基于快照的撤销与重做
 
 因为快照的存储方式比较常见,社区里也有不少基于快照的解决方案,不需要重复造轮子了,看一下`zustand`官方推荐的`zundo`中间件是怎么实现撤销回溯的
+
 ![zundo](/post/immer/zundo.png)
 
-0. 简单描述下`zustand`,可以理解成一个不需要写`actionType`的版本的`hooks`风格的`redux`
+> 简单描述下`zustand`,可以理解成一个不需要写`actionType`的版本的`hooks`风格的`redux`
 ```tsx
 import { create } from 'zustand'
 
@@ -110,7 +111,17 @@ const FC = () => {
 
 ```
 #### 中间件内部状态
-中间件`zundo`内部也是一个单独的`zustand`状态仓库,调用了`zustand`的`createStore`创建了一份实例（__下文统称内部实例__）,用来保存状态快照,以及对应的操作状态的方法。中间件初始化时会传递外部实例的`set`/`get` 给到内部实例的方法,形成闭包调用,这样内部实例在执行撤销重做时就能反过来调用外部实例的`setState`来操作外部状态
+
+中间件`zundo`内部也是一个单独的`zustand`状态仓库,调用了`zustand`的`createStore`创建了一份实例（__下文统称内部实例__）,用来保存状态快照,以及对应的操作状态的方法, 并且以`temporal`的字段将内部实例暴露给外部实例。
+
+```ts
+store.temporal = createStore(
+  options?.wrapTemporal?.(temporalStateCreator(set, get, options)) ||
+    temporalStateCreator(set, get, options),
+);
+```
+
+中间件初始化时会传递外部实例的`set`/`get` 给到内部实例的方法,形成闭包调用,这样内部实例在执行撤销重做时就能反过来调用外部实例的`setState`来操作外部状态
 
 **所以这里表面说是状态回溯,实则是把一个以前的快照以一个新的`setState`的形式提交更新,对于状态仓库来说并没有真正的回到过去,而是来到了一个新的状态,只不过这个新的状态恰巧和前面某一次的状态一模一样**
 
@@ -178,7 +189,7 @@ export const temporalStateCreator = <TState>(
 }
 
 ```
-如果剔除所有配置化的参数逻辑,`_handleSet`的默认行为可以简化为, 当外部应用状态发生了变更, 且在中间件开启了`isTracking`的状态,将外部实例的数据（快照）作为最新的快照数据追加到内部实例的`pastStates`中, 且清空`futureStates`. 此处使用了`concat`而非`push`, 因为`concat`返回了一个新的数组, 简洁的实现了`immutable`.
+如果剔除所有配置化的参数逻辑,`_handleSet`的默认行为可以简化为, 当外部应用状态发生了变更, 且在中间件开启了`isTracking`的状态,将外部实例 __更新前__ 的状态`pastState`作为最新的快照数据追加到内部实例的`pastStates`中, 且清空`futureStates`. 此处使用了`concat`而非`push`, 因为`concat`返回了一个新的数组, 简洁的实现了`immutable`.
 
 ```ts
 return {
@@ -192,8 +203,49 @@ return {
   }
 }
 ```
----
 #### 历史记录栈的实现
+`zundo` 使用了2个数组来实现历史记录, 每一个数组内相邻的两份快照都代表了一次外部实例状态转移的前后状态, 所以快照的顺序即代表了操作的顺序,
+- 当外部实例发生操作, 状态变化时, 由上文提到的`_handleSet`方法拦截了并推入`pastStates`
+
+![step1](/post/immer/step1.png)
+
+- 当外部实例执行`undo`时, `zundo`会先从外部实例拿一份最新的状态, 将`pastStates`倒序遍历并切割, 遍历长度为撤销的步数, (比如一次性撤销2步) 默认为1步, 这样倒序遍历并切割后的数组的第一个元素就是将要应用到外部实例的快照数据, 然后将切割数组中剩下的元素倒序的推入`futureStates`数组
+```ts
+  const currentState = options?.partialize?.(userGet()) || userGet();
+  // 从尾部开始倒序切割, 获得一个新的倒序子数组
+  const statesToApply = get().pastStates.splice(-steps, steps);
+  // 倒序子数组的第一份数据就是将要应用的快照
+  const nextState = statesToApply.shift()!;
+  userSet(nextState);
+  set({
+    // 由于使用了`splice`, `pastStates`引用未变但是存的数据变了
+    pastStates: get().pastStates,
+    futureStates: get().futureStates.concat(
+      options?.diff?.(currentState, nextState) || currentState,
+      statesToApply.reverse(),
+    ),
+  });
+
+```
+> 这块的源码涉及到两次翻转有点绕, 简单来说就是`pastStates`是一个栈, 一次性撤销几步, 就从`pastStates`从后往前数拿第几个数据, 把他设置回外部实例,然后先把当前最新状态保存到`futureStates`, 再把比拿走的那份数据`index`大的所有快照全都 __倒序地__ 塞到`futureStates`的数组尾部, 用来保证`pastStates`中快照的顺序由最久远的快照排列到最临近的快照, 而`futureStates`中的数据顺序由最临近的快照排列到最久远的快照
+
+图例展示了一次撤销两步时, 内部实例的数组变化情况：
+![step2](/post/immer/step2.png)
+
+- 当外部实例执行`redo`时, 方法的行为与`undo`相似, 只是把操作的对象数组相互交换了一下, 源码也十分相似
+```ts
+  const currentState = options?.partialize?.(userGet()) || userGet();
+  const statesToApply = get().futureStates.splice(-steps, steps); 
+  const nextState = statesToApply.shift()!;
+  userSet(nextState);
+  set({
+    pastStates: get().pastStates.concat(
+      options?.diff?.(currentState, nextState) || currentState,
+      statesToApply.reverse(),
+    ),
+    futureStates: get().futureStates,
+  });
+```
 
 
 ---
