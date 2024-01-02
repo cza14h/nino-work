@@ -12,9 +12,9 @@ tags:
 
 ### 提要与背景
 
-撤销与重做是可视化编辑器项目类似于[draw.io](https://draw.io)涉及到一个常用的需求, 也是之前旧版本一直没填上的坑. 用户操作的入口和复杂程度都算是比较高的, 所以撤销重做的界定(主要体现在连续的拖拉拽移动, 缩放, 旋转)是一个比较关键的点. 
+撤销与重做是编排类应用涉及到一个常用的需求, 用户操作的入口和复杂程度都算是比较高的, 所以撤销重做的界定是一个比较关键的点. 在普通撤销重做的基础上, 加入可视化的历史记录面板以增强界面提供的信息, 方便用户的操作.
 
-对于这次撤销与重做的核心的选型是因为项目中使用了 `@reduxjs/toolkit`(下文会简写为`RTK`) 这个redux官方封装的功能增强版轮子, 轮子里面是使用`immer`作为`immutable`的实现方式. 所以利用了`immer`中记录`patch`的特性来进行差分回滚.
+由于应用是使用`react`作为视图框架, 所以本文都会围绕着`react`相关的生态来实现相关的功能
 
 ---
 
@@ -81,7 +81,7 @@ const FC = () => {
 ```
 
 #### 从入口文件开始
-首先实现了`zustand`中间件的注册方法,拦截了使用了该中间件的`store`（__下文统称外部实例__）的`set`和`setState`方法,使其额外执行一系列记录外部实例状态变更的操作, 这里就可以看到,`zundo`通过调用传入的`store`的`get`方法,拿到了外部实例的全部/部分（通过传入回调实现）的快照
+`zustand`通过传递`store`实例来模拟传统注册中间件的效果. 中间件通过拦截被传递的的`store`实例（__下文统称外部实例__）的`set`和`setState`方法, 使其额外执行一系列记录外部实例状态变更的操作. 这里就可以看到,`zundo`通过调用传入的`store`的`get`方法,拿到了外部实例的全部/部分（通过传入回调实现）的快照
 ```ts
     /**
      * @note 修改了注释便于阅读
@@ -189,7 +189,7 @@ export const temporalStateCreator = <TState>(
 }
 
 ```
-如果剔除所有配置化的参数逻辑,`_handleSet`的默认行为可以简化为, 当外部应用状态发生了变更, 且在中间件开启了`isTracking`的状态,将外部实例 __更新前__ 的状态`pastState`作为最新的快照数据追加到内部实例的`pastStates`中, 且清空`futureStates`. 此处使用了`concat`而非`push`, 因为`concat`返回了一个新的数组, 简洁的实现了`immutable`.
+如果剔除所有配置化的参数逻辑,`_handleSet`的默认行为可以简化为, 当外部应用状态发生了变更, 且在中间件开启了`isTracking`的状态,将外部实例 __更新前__ 的状态`pastState`作为最新的快照数据追加到内部实例的`pastStates`中. 此处使用了`concat`而非`push`, 因为`concat`返回了一个新的数组, 简洁的实现了`immutable`.
 
 ```ts
 return {
@@ -197,17 +197,21 @@ return {
     if(get().isTracking){
        set({
         pastStates: get().pastStates.concat(pastState), 
-        futureStates: []
+        futureStates: [] //外部状态变更将清空futureStates
       });
     }
   }
 }
 ```
-#### 历史记录栈的实现
-`zundo` 使用了2个数组来实现历史记录, 每一个数组内相邻的两份快照都代表了一次外部实例状态转移的前后状态, 所以快照的顺序即代表了操作的顺序,
-- 当外部实例发生操作, 状态变化时, 由上文提到的`_handleSet`方法拦截了并推入`pastStates`
+ 历史记录的实现
+`zundo` 使用了2个数组来实现历史记录, 每一个数组内相邻的两份快照都代表了一次外部实例状态转移的前后状态, 所以快照的顺序即代表了操作的顺序。
+__`pastStates`数组代表了可以撤销的快照数量, `futureStates`数组代表了可以重做的快照数量.__
+- 当外部实例发生操作, 状态变化时, 由上文提到的`_handleSet`方法拦截了状态并推入`pastStates`
 
 ![step1](/post/immer/step1.png)
+
+- 此外,应用本身处于撤销若干步的状态(即`futureStates`中有值), 外部实例发生的状态变更会让历史记录栈丢弃`futureStates`中存放的重做的数据, 形成一条新的快照状态转移链路.
+![step1_](/post/immer/step1_.png)
 
 - 当外部实例执行`undo`时, `zundo`会先从外部实例拿一份最新的状态, 将`pastStates`倒序遍历并切割, 遍历长度为撤销的步数, (比如一次性撤销2步) 默认为1步, 这样倒序遍历并切割后的数组的第一个元素就是将要应用到外部实例的快照数据, 然后将切割数组中剩下的元素倒序的推入`futureStates`数组
 ```ts
@@ -227,7 +231,7 @@ return {
   });
 
 ```
-> 这块的源码涉及到两次翻转有点绕, 简单来说就是`pastStates`是一个栈, 一次性撤销几步, 就从`pastStates`从后往前数拿第几个数据, 把他设置回外部实例,然后先把当前最新状态保存到`futureStates`, 再把比拿走的那份数据`index`大的所有快照全都 __倒序地__ 塞到`futureStates`的数组尾部, 用来保证`pastStates`中快照的顺序由最久远的快照排列到最临近的快照, 而`futureStates`中的数据顺序由最临近的快照排列到最久远的快照
+> 这块的源码涉及到两次数组翻转有点绕, 简单来说就是`pastStates`是一个栈, 一次性撤销几步, 就从`pastStates`从后往前数拿第几个数据, 把他设置回外部实例,然后先把当前最新状态保存到`futureStates`, 再把比拿走的那份数据`index`大的所有快照全都 __倒序地__ 塞到`futureStates`的数组尾部, 用来保证`pastStates`中快照的顺序由最久远的快照排列到最临近的快照, 而`futureStates`中的数据顺序由最临近的快照排列到最久远的快照
 
 图例展示了一次撤销两步时, 内部实例的数组变化情况：
 ![step2](/post/immer/step2.png)
@@ -247,71 +251,83 @@ return {
   });
 ```
 
+#### 小结
+`zundo`实现了一个基于`immutable`规范的快照撤销与重做能力, 通过拦截`zustand`的`set`来捕获快照, 同时维护在内部的状态仓库里, 当执行撤销回退时, `zundo`分别从不同的状态数组内拿到对应的快照并`set`回使用该中间件的`store`已达成时间回溯的效果. 快照的思想更加关注于状态的结果, 对状态转移如何产生的并不关心.
 
 ---
-## 实现一个基于差分补丁的撤销与重做
+### 实现一个基于差分补丁的撤销与重做
 
-撤销与重做设计思想类似命令模式, 开发者事先注册好确定的指令, 赋予这些指令功能的同时还能够同步记录一些其他运行时的元数据, 在用户交互(执行命令)的同时, 将命令推入栈中方便程序作后续处理亦或者在满足某些条件的情况下丢弃.
+正如前置知识章节的示意图, 使用补丁数据进行撤销与重做, 要关注补丁对生成的过程而非追踪应用的状态, 设计思想类似命令模式, 将触发状态转移的源头方法进行收敛, 统一进行差分计算, 同时能够同步记录一些其他运行时的元数据, 在应用交互(执行状态转移命令)时, 将这些元数据与补丁保存到历史记录集合中用作展示以及撤销重做的核心功能实现
 
-套用到当前的项目业务场景中去,可以归纳为
+套用到编排类应用的业务场景中去,可以归纳为
 - 这些注册好的确定的指令就是提供给用户的, 用户交互发生时直接/间接需要调用到的方法. 
 - 推入栈的数据记录了可以重现用户操作的数据.
 - 在实现以上两点的前提下, 降低代码侵入性提高动态更新的支持
 
-### 补丁数据
+>这个版本的撤销与重做的实现是基于 `@reduxjs/toolkit`(下文会简写为`RTK`) 这个`redux`官方封装的功能增强版轮子来实现的.
+#### 补丁数据
 
-撤销重做的核心就是正向与逆向的补丁数据,在每次修改`state`后,可以通过类似`microdiff`这类的库,通过交换顺序对前后两个状态之间进行计算正向与反向的`patch`, 这样的设计需要侵入并拦截状态管理库的数据的`setter`过程,例如传统的`redux`则就需要在每个`reducer`中显式的实现,就没有那么优雅
+撤销重做的核心就是正向与逆向的补丁数据,在每次修改`state`后,可以通过类似`microdiff`这类的库,通过交换顺序对前后两个状态之间进行计算正向与反向的`patch`, 这样的设计需要侵入并拦截状态管理库的数据的`setter`过程,例如传统的`redux`则就需要在每个`reducer`中显式的实现, 就没有那么优雅.
 
-好消息是,常用的不可变库`immer`,其实就提供了这个记录补丁数据的能力, 包括正向与逆向, 只是该功能默认不开启。而`RTK`对`redux`的封装正是基于`immer`来实现的
+好消息是,常用的不可变库`immer`, 其实就提供了这个记录补丁数据的能力, 包括正向与逆向, 只是该功能默认不开启。而`RTK`对`redux`的封装正是基于`immer`来实现的
 
 >显式地开启补丁功能[官方文档](https://immerjs.github.io/immer/patches/). 
+
 ```javascript
 // version 6
 import { enablePatches } from 'immer'
 
 enablePatches();
 ```
-开启后即可在`produce`方法中,传入一个回调作为第三个参数, 该回调将会获得`produce`执行过程中对`draft`对象所修改的所有行为的补丁, 以`patches`标注为正向补丁, `inversePatches`标注为反向回溯补丁, 同时`immer`还提供了使用补丁的方法`applyPatches`来应用刚刚输出的正反向补丁
-
+开启后即可在`produce`方法中, 传入一个回调作为第三个参数, 该回调将会获得`produce`执行过程中对`draft`对象所修改的所有行为的补丁, 以`patches`标注为正向补丁, `inversePatches`标注为反向回溯补丁, 同时`immer`还提供了使用补丁的方法`applyPatches`来应用刚刚输出的正反向补丁
 
 同时`immer`也提供了应用补丁的工具函数`applyPatches`:
+>注: 新版的`immer`可以通过使用`produceWithPatches`这个方法来生成补丁, 更加的简洁, 同样也需要显示的开启`Patch`插件. 但是由于开发这个需求的时候还没有这个功能所以将会以回调形式进行改造
 ```javascript
-import produce, { applyPatches } from 'immer';
+import produce, { applyPatches, produceWithPatches } from 'immer';
 
-let state = {
+const state = {
   name: "Micheal",
   age: 32
 }
-let changes = []
+const changes = []
+const inverseChanges = []
 
-let inverseChanges = []
-
-let state = produce(
-  fork,
+const nextState = produce(
+  state,
   draft => {
     draft.age = 33
   },
+  // 这里可以接受一个回调用来接收补丁, 用闭包函数来记录补丁
   (patches, inversePatches) => {
     changes.push(...patches)
     inverseChanges.push(...inversePatches)
   }
 )
-let lastState = applyPatches(state, inverseChanges)
+// 新版的元组写法, 更函数式一点
+const [nextStateFromNewApi, patches, inversePatches] = produceWithPatches(
+  state, 
+  draft => {
+    draft.age = 33
+  },
+)
+
+// 应用补丁
+const lastState = applyPatches(state, inverseChanges)
 expect(lastState).toEqual({
   name: "Micheal", 
   age: 32 
 })
 ``` 
-于是我们撤销重做的改造就会围绕着这两份数据进行
+于是我们撤销重做的改造就会围绕着这两份`patch`数据进行
 
 <!-- 至此`immer`已经帮我们完成了最难的一部分, 而`@reduxjs/toolkit`中就使用了`immer`作为依赖库, 现在要做的就是把每次`produce` (`createSlice`中实现`reducer`的核心)生成的`patches`与`inversePatches`成对的保存在一条记录里作为历史. -->
 
-### 抽象命令注册方法
-从现有的项目出发, 用户的操作会带来数据上的改变, 但不是所有的操作都需要历史记录 例如切换页签, 调整编辑器画布缩放程度这类不影响最终编辑器生产的结果的数据/状态. 编辑器应该记录的是那些,影响最终产物的数据, 例如某个组件的长宽,布局位置等, 在先前的开发过程中已经在`redux`中把这两类的状态区分开,所以我们现在主需要对那些有影响力(应该准确回显)的数据进行操作历史记录.
+#### 设计命令注册方法
+从现有的项目出发, 用户的操作会带来数据上的改变, 但不是所有的操作都需要历史记录, 就像`PhotoShop`那样, 有时候打开了画板, 是不需要记录到历史的, 而那些编辑了/操作了图层的动作才是需要记录的, 所以这里就需要将记录`patch`的控制权开放给上层应用, 这样才能够有选择的记录补丁.
 
- `redux`的核心是一个个`reducer`, 我们在定义这些`reducer`的过程中其实也是在向`redux`注册一个又一个的命令, 我们可以在复用这一块的注册行为的基础上去扩展以最终达到注册历史记录命令的目的. 在 `@reduxjs/tookit`的[官网示例](https://redux-toolkit.js.org/api/createSlice#reducers)上是这样定义的:
+`redux`的核心是一个个`reducer`, 我们在定义这些`reducer`的过程中其实也是在向`redux`注册一个又一个的命令, 我们可以在复用这一块的注册行为的基础上去扩展以最终达到注册历史记录命令的目的. 在 `RTK`的[官网示例](https://redux-toolkit.js.org/api/createSlice#reducers)上是这样定义的:
 
->
 ``` javascript
 import { createSlice, nanoid } from '@reduxjs/toolkit'
 
@@ -331,7 +347,9 @@ const todosSlice = createSlice({
   },
 })
 ```
-`reducer`的模式天然契合,于是设想我们是否可以给每个`reducer`额外添加一份回调, 用作撤销回退的入口, 于是设想它应该是这样的
+`reducer`的模式天然契合,于是设想我们是否可以给每个`reducer`额外添加一份回调, 用于转发`produce`的第三个回调, 这样能用作记录补丁的入口, 同时它也应该是一个可选的回调, 当不传入方法时, 它输出的数据便不会被记录, 这样也满足了上文提到的有选择性的记录补丁的需求.
+
+于是设想它应该是这样的
 ```diff 
 {
   reducer: (state, action) => {
@@ -342,16 +360,16 @@ const todosSlice = createSlice({
     return { payload: { id, text } }
   },
 + patch:(patches, inversePatches, action) => {
-+   //...
++   // 记录patches 和 action
 + }
 },
 ```
 
-__修改源码__
+#### 修改源码
 
-在默认的`@redux/toolkit`中, 并没有实现上述功能, 于是需要**修改源码**, 让`immer`在`reducer`执行时记录差分补丁. `immer`作用的区域是`createReducer.ts`这个文件, 首先需要在其引入模块部分开启补丁模式. 而`createReducer.ts`会被`createSlice.ts`文件引用,同时为了保证改造后的类型推断完整, `creatReducer.ts`中的类型涉及到文件也要修改,经排查只有`mapBuilders.ts`, 也会被`createSlice.ts`引用
+在默认的`RTK`中, 并没有实现上述功能, 于是需要**修改源码**, 让`immer`在`reducer`执行时记录差分补丁. `immer`作用的区域是`createReducer.ts`这个文件, 首先需要在其引入模块部分开启补丁模式. 而`createReducer.ts`会被`createSlice.ts`文件引用,同时为了保证改造后的类型推断完整, `creatReducer.ts`中的类型涉及到文件也要修改,经排查只有`mapBuilders.ts`, 也会被`createSlice.ts`引用
 
-RTK的源码拆分比较灵活,我们可以通过实现自己的`createSlice` `createReducer`等接口来替换原本的功能,做到最小程度的改动
+`RTK`的源码拆分比较灵活,我们可以通过实现自己的`createSlice`, `createReducer`等接口来替换原本的功能,做到最小程度的改动
 > 本文基于`@reduxjs/toolkit@1.8.6`版本进行改造,后续官方包更新可能会导致不可用,但几率不大
 
 1. 首先开启`immer`相关的api, 把需要定义的类型也导入
@@ -367,9 +385,51 @@ RTK的源码拆分比较灵活,我们可以通过实现自己的`createSlice` `c
 
 ```
 
+2. 然后修改对应的配置类型标注让`ts`能正确推导, 原有的`reducers`配置定义存放在`createSlice.ts#L227`的`ValidateSliceCaseReducers`类型,
+```ts
+export type ValidateSliceCaseReducers<S, ACR extends SliceCaseReducers<S>> = ACR & {
+  [T in keyof ACR]: ACR[T] extends {
+    reducer(s: S, action?: infer A): any
+  }
+    ? {
+        prepare(...a: never[]): Omit<A, 'type'>
+      }
+    : {}
+}
+```
+可见只有`reducer`和`prepare`两个定义, 在这里加上我们想要的`patch`方法定义, 用`|`连接, 代表可选. 并且额外接收一个`action`参数, 可以用来接收元数据
+```diff
+export declare type ValidateSliceCaseReducers<S, ACR extends SliceCaseReducers<S>> = ACR & {
+  [T in keyof ACR]: ACR[T] extends {
+    reducer(s: S, action?: infer A): any;
+  }
+-   ? {
+-        prepare(...a: never[]): Omit<A, 'type'>
+-      }
++    ?
++        | {
++            prepare(...a: never[]): Omit<A, 'type'>;
++          }
++        | {
++            patch(data: Patch[], inverse: Patch[], action?: A): void;
++          }
++    : {};
+};
+
+```
+3. 在`createSlice`解析配置时, 也要像`caseReducer`一样, 将所有的`patch`收集起来, 为了命名一直, 也叫它`casePatcher`. `CasePatcher`类型就是刚刚定义的`patch`方法类型
+```diff
+/**
+* @see @reduxjs/toolkit/src/createSlice.ts#L285
+*/
+const sliceCaseReducersByName: Record<string, CaseReducer> = {}
+const sliceCaseReducersByType: Record<string, CaseReducer> = {}
++ const sliceCasePatchersByType: Record<string, CasePatcher> = {};
+```
 
 
-### 历史记录栈
+
+#### 历史记录栈
 - `immer`产生的`pathes`需要按照顺序进行存储 ,通过维护一个全局栈来实现, 并且需要用一个值来记录当前的回退位置。
 - 通常来说,只有在产生新操作记录的时候才会对当前栈进行切分, 舍弃记录位置之后的所有`patches`
 

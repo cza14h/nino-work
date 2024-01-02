@@ -348,43 +348,50 @@ code.language-diff .cl .gi {
 
 /* Comment */
 .chroma .c {
-  color: #ff0000;
+  color: #6a9955;
+    font-family: Menlo, "Cascadia Code";
   font-style: italic
 }
 
 /* CommentHashbang */
 .chroma .ch {
-  color: #ff0000;
+  color: #6a9955;
+    font-family: Menlo, "Cascadia Code";
   font-style: italic
 }
 
 /* CommentMultiline */
 .chroma .cm {
-  color: #ff0000;
+  color: #6a9955;
+    font-family: Menlo, "Cascadia Code";
   font-style: italic
 }
 
 /* CommentSingle */
 .chroma .c1 {
-  color: #ff0000;
+  color: #6a9955;
+    font-family: Menlo, "Cascadia Code";
   font-style: italic
 }
 
 /* CommentSpecial */
 .chroma .cs {
-  color: #ff0000;
+  color: #6a9955;
+    font-family: Menlo, "Cascadia Code";
   font-style: italic
 }
 
 /* CommentPreproc */
 .chroma .cp {
-  color: #ff0000;
+  color: #6a9955;
+    font-family: Menlo, "Cascadia Code";
   font-style: italic
 }
 
 /* CommentPreprocFile */
 .chroma .cpf {
-  color: #ff0000;
+  color: #6a9955;
+    font-family: Menlo, "Cascadia Code";
   font-style: italic
 }
 
