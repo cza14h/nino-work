@@ -20,23 +20,21 @@ tags:
 
 ### 前置知识
 
-这个需求按功能模块可以划分为, 数据可逆模块 + 历史栈展现模块。  通常情况下实现数据可逆有两种方式: **快照与差分**.
+这个需求按功能模块可以划分为, 数据可逆模块 + 历史列表展现模块。  通常情况下实现数据可逆有两种方式: **快照与差分**.
 
 ### 快照
 
-快照的思想比较容易理解, 直接将执行后的完整状态作为数据推入栈, 由于每一条记录都包含了应用上所有组件完整的状态, 栈中相邻两条记录可以是相互独立的没有耦合, 所以状态之间的切换可以是跳跃的 (可以直接从状态2回到状态4而不考虑中间有多少个状态), 回溯状态的计算量不会随着记录跳跃距离而增长.
+快照的思想比较容易理解, 直接将执行后的完整状态作为数据推入列表, 由于每一条记录都包含了应用上所有组件完整的状态, 列表中相邻两条记录可以是相互独立的没有耦合, 所以状态之间的切换可以是跳跃的 (可以直接从状态2回到状态4而不考虑中间有多少个状态), 回溯状态的计算量不会随着记录跳跃距离而增长.
   ![快照](/post/immer/snapshot.png)
   <!-- <img src="/post/immer/snapshot.png" /> -->
 
-- 一种比较容易理解的快照机制为深拷贝,常见实现方法为`JSON.parse(JSON.stringify())`,`lodash.cloneDeep()`等. 从内存角度来看, 每个状态都是独立一块内存区域, 哪怕是两个相邻记录之间只有很小的改动, 在此方法下的快照都会完整的将状态深拷贝一份作为备份, 这个方法的缺点也是深拷贝带来的内存空间的浪费, 如果条历史记录记录的状态特别多, 亦或者是历史记录栈特别长的时候, 内存问题在本文中提到的所有记录数据方法中将是最差的.
+- 一种比较容易理解的快照机制为深拷贝,常见实现方法为`JSON.parse(JSON.stringify())`,`lodash.cloneDeep()`等. 从内存角度来看, 每个状态都是独立一块内存区域, 哪怕是两个相邻记录之间只有很小的改动, 在此方法下的快照都会完整的将状态深拷贝一份作为备份, 这个方法的缺点也是深拷贝带来的内存空间的浪费, 如果条历史记录记录的状态特别多, 亦或者是历史记录列表特别长的时候, 内存问题在本文中提到的所有记录数据方法中将是最差的.
 
 - 在深拷贝之上的改进方法则是借助不可变库(`immutablejs`, `immerjs`)来解决上者带来的内存问题, 当不可变性介入时, 传统的深拷贝操作将被不可变计算代替, 使得运行过程中只需要记录状态的顶层引用即可.如图所示, 状态`state1`修改`child 2` 后来到 `child 2'`, 根据不可变库的实现, 该属性向父级递归的更新其引用, 使得`parent1` 与 `state1`引用地址获得了更新, 而`child1`, `child3` 以及`parent2`及其子节点保持原有引用地址不变, 实现了未修改处的复用.
 
 ![immutable](/post/immer/immutable.png)
 图中展示了一种严格`immutable`的数据更新过程.
-> `react`推荐`props`和`state`是`immutable`的, 不过在实际开发中, 经常能见到, 只要将传给`react state`的那份数据顶层引用地址更新就能成功设置状态的场景, 而嵌套复杂数据对象内部地址引用没有更新, 会有潜在的危险.
-
-<iframe src="https://stackblitz.com/edit/stackblitz-starters-rnrnzf?embed=1&file=src%2FApp.tsx" ></iframe>
+> `react`推荐`props`和`state`是`immutable`的, 不过在实际开发中, 经常能见到, 只要将传给`react state`的那份数据顶层引用地址更新就能成功设置状态的场景, 而嵌套复杂数据对象内部地址引用没有更新, 会有潜在的危险. [翻车demo](https://stackblitz.com/edit/stackblitz-starters-rnrnzf)
 
 `immutable`利用数据地址来作为判断数据变更与否的依据, 弥补了得传统`===`操作符不能比较复杂数据对象的问题, 通过引入`immutable`的概念, 快照的模式也可以很大程度上视作为只关注修改的属性的差分模式, 而单条记录也只需要保存顶层的根节点地址`state`, 状态的回溯也只需要在状态仓库的顶层进行相应筛选(过滤无需记录的状态)与提交. **在纯前端的应用环境下, 遵循了`immutable`的快照撤销既能最大程度复用数据内存, 也能在任意历史数据快照之间快速切换**
 
@@ -181,7 +179,7 @@ export const temporalStateCreator = <TState>(
           const deltaState = options?.diff?.(pastState, currentState);
           // 支持自定义相等运算方法
           if (!(options?.equality?.(pastState, currentState) || deltaState === null)) {
-            // 支持设置历史栈`pastStates`最大容量, 溢出后将丢弃最旧的数据,默认容量无上限
+            // 支持设置历史列表`pastStates`最大容量, 溢出后将丢弃最旧的数据,默认容量无上限
             if (options?.limit && get().pastStates.length >= options?.limit) {
               get().pastStates.shift();
             }
@@ -222,7 +220,7 @@ return {
 
 ![step1](/post/immer/step1.png)
 
-- 此外,应用本身处于撤销若干步的状态(即`futureStates`中有值), 外部实例发生的状态变更会让历史记录栈丢弃`futureStates`中存放的重做的数据, 形成一条新的快照状态转移链路.
+- 此外,应用本身处于撤销若干步的状态(即`futureStates`中有值), 外部实例发生的状态变更会让历史记录列表丢弃`futureStates`中存放的重做的数据, 形成一条新的快照状态转移链路.
 
 ![step1_](/post/immer/step1_.png)
 
@@ -246,7 +244,7 @@ return {
 
 ```
 
-> 这块的源码涉及到两次数组翻转有点绕, 简单来说就是`pastStates`是一个栈, 一次性撤销几步, 就从`pastStates`从后往前数拿第几个数据, 把他设置回外部实例,然后先把当前最新状态保存到`futureStates`, 再把比拿走的那份数据`index`大的所有快照全都 **倒序地** 塞到`futureStates`的数组尾部, 用来保证`pastStates`中快照的顺序由最久远的快照排列到最临近的快照, 而`futureStates`中的数据顺序由最临近的快照排列到最久远的快照
+> 这块的源码涉及到两次数组翻转有点绕, 简单来说就是`pastStates`是一个数组, 一次性撤销几步, 就从`pastStates`从后往前数拿第几个数据, 把他设置回外部实例,然后先把当前最新状态保存到`futureStates`, 再把比拿走的那份数据`index`大的所有快照全都 **倒序地** 塞到`futureStates`的数组尾部, 用来保证`pastStates`中快照的顺序由最久远的快照排列到最临近的快照, 而`futureStates`中的数据顺序由最临近的快照排列到最久远的快照
 
 图例展示了一次撤销两步时, 内部实例的数组变化情况：
 
@@ -281,7 +279,7 @@ return {
 套用到编排类应用的业务场景中去,可以归纳为
 
 - 这些注册好的确定的指令就是提供给用户的, 用户交互发生时直接/间接需要调用到的方法.
-- 推入栈的数据记录了可以重现用户操作的数据.
+- 推入列表的数据记录了可以重现用户操作的数据.
 - 在实现以上两点的前提下, 降低代码侵入性提高动态更新的支持
 
 **这个版本的撤销与重做的实现是基于 `@reduxjs/toolkit`(下文会简写为`RTK`) 这个`redux`官方封装的功能增强版轮子来实现的.**
@@ -531,15 +529,78 @@ const increment = () => store.dispatch(mySliceWithPatch.actions.increment())
 
 ```
 
-#### 历史记录栈
+#### 历史记录列表
 
-由于之前我们已经解读过`zundo`的历史记录实现的方式, 故原理不在多做赘述
+由于之前我们已经解读过`zundo`的历史记录实现的方式, 故原理不在多做赘述, 列出对比`zundo`快照实现的差异
 
-- `immer`产生的`pathes`需要按照顺序进行存储 ,通过维护一个全局栈来实现, 并且需要用一个值来记录当前的回退位置。
-- 通常来说,只有在产生新操作记录的时候才会对当前栈进行切分, 舍弃记录位置之后的所有`patches`
+- `immer`产生的`pathes`需要按照顺序进行存储, 并且需要用一个值来记录当前的回退位置。
+  - 可以进一步将`patches`封装成一个闭包供`undo`和`redo`调用
+- `zundo`没有对当前的状态记录, 也就是进入页面时, 列表为空, 可以默认携带一个类似“初始化页面”的操作记录用于更好的提示
+- 步进大于1的`timetravel`的情况, 差分模式需要依次走完完整的链路, 并不能像`zundo`那样使用双数组切分取值+拼接的形式, 所以这里使用单个数组+`currentIndex`的模式来实现
+
+具体的实现逻辑参照下图
+
+![stack](/post/immer/stack.png)
+
+1. 首先我们定义一个`record`的类型用来指代`state`的状态, 存放一些撤销与回退的方法
+
+```ts
+type RecordType = {
+  name: string
+  undo: ()=> void
+  redo?: ()=> void //注意这里是optional
+  timeStamp: Date
+}
+class Record {
+  redo?: () => void
+  constructor(public name:string, public undo: ()=>void ){
+    this.timeStamp = new Date()
+  }
+}
+```
+
+从逻辑图中也能看到, 每一个`record`代表一个`state`, 但是每一次操作产生的`apply (inverse) patches`闭包并不会同时作为同一条`Record`的`undo`和`redo`. 只有新的`record`被生成时, 前一个`record`的`redo`才会被赋值, 所以`redo`才会被定义为`optional`. 一个很符合直觉的解释就是: **你永远不能重做一个最新的状态, 你只能做撤销.**
+
+此外, `name`作为元数据输入生成, 而`timeStamp`可以在创建`Record`时立即自动记录.
+
+2. 顺着上面的思路, 我们可以推导出历史记录列表的一些能力, 进行历史记录列表的构建
+   - 支持生成`record`, 且生成时需要关联上一条记录的`redo` (这也是为什么需要有一个`init state`, 可以避免写一些边界判断)
+   - 有一个指针变量用于标识当前的撤销重做位置
+
+```ts
+class Stack {
+  current = -1 // 因为用于标注真实的`index`, 所以初始为 -1
+  stack :Record[] = []
+}
+```
+
+当状态发生转移, 创建一条`record`, 此时如果在撤销若干步的某个状态(当前`record`不是最后一个)时`this.current + 1 !== this.stack.length`, 需要舍弃后面的所有`record`, 衍生出一条新的状态转移链路. 且赋值目前最后一条`record`的`redo`。
+
+```ts
+class Stack{
+  record(name: string, redo: () => void, undo: () => void) { 
+    if(this.stack.length !== this.current + 1){
+      this.stack.splice(this.current + 1);
+    }
+    this.stack.push(new Record(name, undo));
+    const currentNode = this.stack[this.current];
+    if (currentNode) {
+      currentNode.redo = redo;
+    }
+    this.current++;
+  }
+}
+```
+
+要注意这里`record`方法的 `redo` 和 `undo`闭包是由一次状态转移产生的`patch`和`inversePatch`构建而来的. 一个补全列表尾部`record`的`redo`, 一个用于直接构建新的`record`.
+
 
 #### 与`store`配合实现撤销重做
 
 ---
 
 ### 总结
+
+---
+
+### 拓展：与`yjs`配合实现多人协同的撤销回退
