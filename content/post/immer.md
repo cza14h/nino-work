@@ -12,9 +12,9 @@ tags:
 
 ### 提要与背景
 
-撤销与重做是编排类应用涉及到一个常用的需求, 用户操作的入口和复杂程度都算是比较高的, 所以撤销重做的界定是一个比较关键的点. 在普通撤销重做的基础上, 加入可视化的历史记录面板以增强界面提供的信息, 方便用户的操作.
+撤销与重做是编排类应用涉及到一个常用的需求, 用户操作的入口杂, 动态性较高, 所以撤销重做的界定是一个比较关键的点. 在普通撤销重做的基础上, 加入可视化的历史记录面板以增强界面提供的信息, 方便用户的操作.
 
-由于应用是使用`react`作为视图框架, 所以本文都会围绕着`react`相关的生态来实现相关的功能
+由于应用是使用`react`作为视图框架, 所以本文都会围绕着`react`的生态来实现相关的功能
 
 ---
 
@@ -22,7 +22,7 @@ tags:
 
 这个需求按功能模块可以划分为, 数据可逆模块 + 历史列表展现模块。  通常情况下实现数据可逆有两种方式: **快照与差分**.
 
-### 快照
+#### 快照
 
 快照的思想比较容易理解, 直接将执行后的完整状态作为数据推入列表, 由于每一条记录都包含了应用上所有组件完整的状态, 列表中相邻两条记录可以是相互独立的没有耦合, 所以状态之间的切换可以是跳跃的 (可以直接从状态2回到状态4而不考虑中间有多少个状态), 回溯状态的计算量不会随着记录跳跃距离而增长.
   ![快照](/post/immer/snapshot.png)
@@ -34,13 +34,13 @@ tags:
 
 ![immutable](/post/immer/immutable.png)
 图中展示了一种严格`immutable`的数据更新过程.
-> `react`推荐`props`和`state`是`immutable`的, 不过在实际开发中, 经常能见到, 只要将传给`react state`的那份数据顶层引用地址更新就能成功设置状态的场景, 而嵌套复杂数据对象内部地址引用没有更新, 会有潜在的危险. [翻车demo](https://stackblitz.com/edit/stackblitz-starters-rnrnzf)
+> `react`推荐`props`和`state`是`immutable`的, 不过在实际开发中, 经常能见到, 只要将传给`react state`的那份数据顶层引用地址更新就能成功设置状态的场景, 而嵌套复杂数据对象内部地址引用没有更新, 会有潜在的危险. [翻车demo](https://stackblitz.com/edit/stackblitz-starters-5a1htw?)
 
 `immutable`利用数据地址来作为判断数据变更与否的依据, 弥补了得传统`===`操作符不能比较复杂数据对象的问题, 通过引入`immutable`的概念, 快照的模式也可以很大程度上视作为只关注修改的属性的差分模式, 而单条记录也只需要保存顶层的根节点地址`state`, 状态的回溯也只需要在状态仓库的顶层进行相应筛选(过滤无需记录的状态)与提交. **在纯前端的应用环境下, 遵循了`immutable`的快照撤销既能最大程度复用数据内存, 也能在任意历史数据快照之间快速切换**
 
 但是也有弊端, 由于数据引用地址是编程语言的执行环境提供的, 所以在跨环境, 或者执行环境不同的场景下, 没有办法引入数据地址作为额外标识来实现`immutable`, 快照将会退化到深拷贝模式.
 
-### 差分补丁
+#### 差分补丁
 
 差分补丁主要关注于每两次之间的状态差分, 需要在状态转移时, 生成相应的正向与反向补丁, 这两种补丁保证了两个状态之间的来回切换而不需要保存完整的状态信息.
 
@@ -202,7 +202,7 @@ export const temporalStateCreator = <TState>(
 ```ts
 return {
   _handleSet :(pastState)=>{
-    if(get().isTracking){
+    if (get().isTracking) {
        set({
         pastStates: get().pastStates.concat(pastState), 
         futureStates: [] //外部状态变更将清空futureStates
@@ -283,7 +283,21 @@ return {
 - 推入列表的数据记录了可以重现用户操作的数据.
 - 在实现以上两点的前提下, 降低代码侵入性提高动态更新的支持
 
-**这个版本的撤销与重做的实现是基于 `@reduxjs/toolkit`(下文会简写为`RTK`) 这个`redux`官方封装的功能增强版轮子来实现的.**
+**这个版本的撤销与重做的实现是基于 `@reduxjs/toolkit`(下文会简写为`RTK`) 这个`redux`官方封装的功能增强版轮子来实现的.** 至于为什么, 首先看一下官方基于`slice`概念的[示例](https://redux-toolkit.js.org/api/createSlice#reducers)
+
+``` javascript
+import { createSlice } from '@reduxjs/toolkit'
+
+const counterSlice = createSlice({
+  name: 'counter',
+  initialState: 0,
+  reducers: {
+    increment: (state) => state + 1,
+  },
+})
+```
+
+经过`RTK`封装后的`redux`十分简洁, 看上去非常像上文提到的`zustand`的`store`定义方式, 但是`RTK`显式的区分了`state`和`reducers`的定义, 并且`reducers`中单个`reducer`支持对象式的定义, 这为我们的扩展提供了切入点.
 
 #### 补丁数据
 
@@ -349,26 +363,26 @@ expect(lastState).toEqual({
 
 从现有的项目出发, 用户的操作会带来数据上的改变, 但不是所有的操作都需要历史记录, 就像`PhotoShop`那样, 有时候打开了画板, 是不需要记录到历史的, 而那些编辑了/操作了图层的动作才是需要记录的, 所以这里就需要将记录`patch`的控制权开放给上层应用, 这样才能够有选择的记录补丁.
 
-`redux`的核心是一个个`reducer`, 我们在定义这些`reducer`的过程中其实也是在向`redux`注册一个又一个的命令, 我们可以在复用这一块的注册行为的基础上去扩展以最终达到注册历史记录命令的目的. 在 `RTK`的[官网示例](https://redux-toolkit.js.org/api/createSlice#reducers)上是这样定义的:
+`redux`的核心是一个个`reducer`, 我们在定义这些`reducer`的过程中其实也是在向`redux`注册一个又一个的命令, 我们可以在复用这一块的注册行为的基础上去扩展以最终达到注册历史记录命令的目的. 对于单个`reducer`, `RTK`支持这样的写法:
 
-``` javascript
-import { createSlice, nanoid } from '@reduxjs/toolkit'
-
-const todosSlice = createSlice({
-  name: 'todos',
-  initialState: [],
-  reducers: {
-    addTodo: {
-      reducer: (state, action) => {
-        state.push(action.payload)
-      },
-      prepare: (text) => {
-        const id = nanoid()
-        return { payload: { id, text } }
-      },
+```js
+reducers: {
+  increment: {
+    reducer(state, action) {
+      const { payload } = action
+      return Math.min(state + payload.step, payload.upperLimit)
     },
-  },
-})
+    prepare(step = 1, upperLimit = Infinity) {
+      return { payload: {step, upperLimit } }
+    }
+  }
+},
+/**
+ * 这样通过接受一个函数`Object`来达到对`reducer`入参更细致的控制
+ * 就可以写成`dispatch(store.actions.increment())`的形式
+ * 而非     `dispatch(store.actions.increment({step:1, upperLimit:Infinity }))`
+ * /
+
 ```
 
 `reducer`的模式天然契合,于是设想我们是否可以给每个`reducer`额外添加一份回调, 用于转发`produce`的第三个回调, 这样能用作记录补丁的入口, 同时它也应该是一个可选的回调, 当不传入方法时, 它输出的数据便不会被记录, 这样也满足了上文提到的有选择性的记录补丁的需求.
@@ -377,13 +391,13 @@ const todosSlice = createSlice({
 
 ```diff
 {
-  reducer: (state, action) => {
-    state.push(action.payload)
+  reducer(state, action) {
+    const { payload } = action
+    return Math.min(state + payload.step, payload.upperLimit)
   },
-  prepare: (text) => {
-    const id = nanoid()
-    return { payload: { id, text } }
-  },
+  prepare(step = 1, upperLimit = Infinity) {
+    return { payload: {step, upperLimit } }
+  }
 + patch:(patches, inversePatches, action) => {
 +   // 记录patches 和 action
 + }
@@ -395,7 +409,7 @@ const todosSlice = createSlice({
 在默认的`RTK`中, 并没有实现上述功能, 于是需要**修改源码**, 让`immer`在`reducer`执行时记录差分补丁. `immer`作用的区域是`createReducer.ts`这个文件, 首先需要在其引入模块部分开启补丁模式. 而`createReducer.ts`会被`createSlice.ts`文件引用,同时为了保证改造后的类型推断完整, `creatReducer.ts`中的类型涉及到文件也要修改,经排查只有`mapBuilders.ts`, 也会被`createSlice.ts`引用
 
 `RTK`的源码拆分比较灵活,我们可以通过实现自己的`createSlice`, `createReducer`等接口来替换原本的功能,做到最小程度的改动
-> 本文基于`@reduxjs/toolkit@1.8.6`版本进行改造,后续官方包更新可能会导致不可用,但几率不大
+> 本文基于`@reduxjs/toolkit@1.8.6`版本进行改造, 后续官方包的破坏性更新可能会导致不可用, 但源码的改造思路应该不会受到影响.
 
 1. 首先开启`immer`相关的api, 把需要定义的类型也导入
 
@@ -417,8 +431,8 @@ const todosSlice = createSlice({
 
     ```ts
     /**
-     * @see https://github.com/reduxjs/redux-toolkit/blob/f7689133ee56e7787447e6089907fa6d1639b771/packages/toolkit/src/createSlice.ts#L227
-    */
+     * @see https://github.com/reduxjs/redux-toolkit/blob/f7689133ee56e7787447e6089907fa6d1639b771/packages/toolkit/src/createSlice.ts#L227 
+     * */
     export type ValidateSliceCaseReducers<S, ACR extends SliceCaseReducers<S>> = ACR & {
       [T in keyof ACR]: ACR[T] extends {
         reducer(s: S, action?: infer A): any
@@ -456,8 +470,8 @@ const todosSlice = createSlice({
 
     ```diff
     /**
-    * @see https://github.com/reduxjs/redux-toolkit/blob/f7689133ee56e7787447e6089907fa6d1639b771/packages/toolkit/src/createSlice.ts#L295
-    */
+     * @see https://github.com/reduxjs/redux-toolkit/blob/f7689133ee56e7787447e6089907fa6d1639b771/packages/toolkit/src/createSlice.ts#L295
+     * */
     const sliceCaseReducersByName: Record<string, CaseReducer> = {}
     const sliceCaseReducersByType: Record<string, CaseReducer> = {}
     + const sliceCasePatchersByType: Record<string, CasePatcher> = {};
@@ -480,8 +494,8 @@ const todosSlice = createSlice({
 
     ```diff
     /**
-    * @see https://github.com/reduxjs/redux-toolkit/blob/f7689133ee56e7787447e6089907fa6d1639b771/packages/toolkit/src/createReducer.ts#L276
-    */
+     * @see https://github.com/reduxjs/redux-toolkit/blob/f7689133ee56e7787447e6089907fa6d1639b771/packages/toolkit/src/createReducer.ts#L276
+     **/
     } else {
     + const casePatcher =
     +   typeof slicePatchCallbackByType?.[action.type] === 'function'
@@ -500,9 +514,7 @@ const todosSlice = createSlice({
 
     ```
 
-5. DONE! 至此已完成了所有的源码改动, 得益于`RTK`优秀的代码功能拆分和`immer`的补丁能力, 让我们用不到40行的修改就完成了对原有功能的扩展
-
-6. 具体的使用方式
+5. DONE! 至此已完成了所有的源码改动, 得益于`RTK`优秀的代码功能拆分和`immer`的补丁能力, 让我们用不到40行的修改就完成了对原有功能的扩展, 具体的使用方式:
 
     ```ts
     import { configureStore } from "@reduxjs/toolkit"
@@ -516,7 +528,7 @@ const todosSlice = createSlice({
           reducer(state, action) {
             state.counter = state.counter + 1
           },
-          patch(patch, inversePatch, action){
+          patch(patch, inversePatch, action) {
             // 补丁记录行为
           }
         }
@@ -551,9 +563,10 @@ const todosSlice = createSlice({
       redo?: ()=> void //注意这里是optional
       timeStamp: Date
     }
+
     class Record {
       redo?: () => void
-      constructor(public name: string, public undo: () => void ){
+      constructor(public name: string, public undo: () => void ) {
         this.timeStamp = new Date()
       }
     }
@@ -568,66 +581,72 @@ const todosSlice = createSlice({
    - 有一个指针变量用于标识当前的撤销重做位置
 
     ```ts
-    class Stack {
+    class History {
       current = -1 // 因为用于标注真实的`index`, 所以初始为 -1
-      stack: Record[] = []
+      records: Record[] = []
     }
     ```
 
-    当状态发生转移, 创建一条`record`, 此时如果在撤销若干步的某个状态(当前`record`不是最后一个)时`this.current + 1 !== this.stack.length`, 需要舍弃后面的所有`record`, 衍生出一条新的状态转移链路. 且赋值目前最后一条`record`的`redo`。
+    当状态发生转移, 创建一条`record`, 此时如果在撤销若干步的某个状态(当前`record`不是最后一个)时`this.current + 1 !== this.records.length`, 需要舍弃后面的所有`record`, 衍生出一条新的状态转移链路. 且赋值目前最后一条`record`的`redo`。
 
     ```ts
-    class Stack {
+    class History {
       // ...
       /**
        * 如本节开篇时阐述的, 这里的`addRecord`也可以设计成直接接收`patches`和`inversePatches`
-      * 当然, 这样做需要同步修改 `RecordType`的实现
-      * */
+       * 当然, 这样做需要同步修改 `RecordType`的实现 
+       **/
       addRecord(name: string, redo: () => void, undo: () => void) { 
-        if(this.stack.length !== this.current + 1){
-          this.stack.splice(this.current + 1);
-        }
-        this.stack.push(new Record(name, undo));
-        const currentNode = this.stack[this.current];
-        if (currentNode) {
-          currentNode.redo = redo;
-        }
-        this.current++;
+        const nextIndex = this.current + 1
+        // 直接使用`immer`保证`records`的`immutable`
+        this.records = produce(this.records, (draft) => {
+          if (draft.length !== nextIndex) {
+            draft.splice(nextIndex);
+          }
+          draft.push(new Record(name, undo));
+          const currentNode = draft[this.current];
+          if (currentNode) {
+            currentNode.redo = redo;
+          }
+        })
+        this.current = nextIndex;
       }
     }
     ```
 
-    要注意这里`record`方法的 `redo` 和 `undo`闭包是由一次状态转移产生的`patch`和`inversePatch`构建而来的. 一个补全列表尾部`record`的`redo`, 一个用于直接构建新的`record`.
+    要注意这里`addRecord`方法的 `redo` 和 `undo`闭包是由一次状态转移产生的`patches`和`inversePatches`构建而来的. 一个补全列表尾部`record`的`redo`, 一个用于直接构建新的`record`.
 
-    然后就可以完成历史记录列表的撤销与重做入口, 通过移动`current`来实现
+    然后就可以完成历史记录列表的撤销与重做入口, 通过移动`current`来实现.
 
     ```ts
-    class Stack {
+    class History {
       //...
-      redo(){
-        if (this.current + 1 === this.stack.length) return // 最后一条记录不能`redo`
-        this.stack[this.current].redo?.()
+      redo() {
+        if (this.current + 1 === this.records.length) return // 最后一条记录不能`redo`
+        this.records[this.current].redo?.()
         ++this.current
       }
-
-      undo(){
+      undo() {
         if (this.current === 0 ) return // 第一条记录不能`undo`
-        this.stack[this.current].undo()
+        this.records[this.current].undo()
         --this.current
       }
-      /**
-       * 这里暂时先不实现`timeTravel`*
-      * */
-      //timeTravel(){}
-      //...
+      timeTravel(to:number){
+        if (to === this.current) return;
+        const cb = to > this.current ? this.redo : this.undo;
+        const count = Math.abs(to - current);
+        for (let i = 0; i < count; i++) {
+          cb.call(this);
+        }
+      }
     }
     ```
 
 3. 最后可以完善一下构造函数, 将一个初始状态推入数组, 这一步也可由持有历史记录列表实例的上层应用来完成.
 
     ```ts
-    class Stack {
-      constructor(){
+    class History {
+      constructor() {
         this.addRecord('初始化', () => {}, () => {})
       }
     }
@@ -637,18 +656,101 @@ const todosSlice = createSlice({
 
 至此我们已经完成了拓展`RTK`的`patch`回调入口以及原生`js`实现的历史记录列表逻辑, 而`RTK`又是由`react`驱动的`store`, 所以历史记录表作为纯`js`实例, 也需要有一个在`react`中的上层实现才能和`RTK`配合使用.
 
-- 一个常见的方法就是通过`react`组件 + 内部实例的方式进行生命周期与方法的暴露, 这里使用一个`abstract class`来抽象一些存在`store`副作用的方法, 这样可以方便接入多个`redux store`同时存在的应用
+1. 将历史记录列表实例接入`react`
 
-  ```ts
-  abstract class UndoRedo extends React.Component {
-    private _stack = new Stack()
-    
-  }
-  ```
+   - 一个常见的方法就是通过`react`组件 + 内部实例的方式进行生命周期与方法的暴露, 这里使用一个`abstract class`来抽象一些存在`store`副作用的方法, 保证组件与`store`解耦, 这样的设计是提升组件的通用性, 甚至可以开源出去, 让其他开发者的应用也能通过实现方法来接入自己的`redux store`.
 
-- 还有一种方法就是通过`react 18`新增的`useSyncExternalStore`方法将纯`js`对象封装成一个可以注入`state`的`hook`, 对于其他支持`hook`版本的`react`, 可以通过安装`use-sync-external-store`的`npm`依赖来使用该能力
+      ```ts
+      abstract class UndoRedo extends React.Component {
+        private _history = new History()
+        abstract getDispatch(actionType: string): Dispatch<AnyAction>
+      }
+      ```
 
-  > 关于`useSyncExternalStore`, 本质也是`useState`和`useEffect`的组合, 具体的原理解析可以参考[这篇文章](https://blog.saeloun.com/2021/12/30/react-18-useSyncExternalStore-api/#understanding-usesyncexternalstore-hook)
+      `createRecord`方法实现了将`patches`封入闭包的过程, 传入的`actionType`是应用补丁`reducer`的`actionType`, 而非触发状态转移的`reducer`的`actionType`
+
+      ```ts
+      abstract class UndoRedo extends React.Component {
+        //...
+        createRecord(name:string, patches: Patch[], inversePatches: Patch[], actionType: string){
+          const dispatch = this.getDispatch(actionType)
+          const redo = () => {
+            dispatch({ action: actionType, payload: patches });
+          };
+          const undo = () => {
+            dispatch({ action: actionType, payload: inversePatches });
+          };
+          this._history.addRecord(name, redo, undo)
+          this.setMemoState() // 下文会实现
+        }
+      }
+      ```
+
+      最后还需要封装一下`timeTravel`, 因为我们选择了封入闭包函数的方式给到底层历史记录列表进行存储, 而底层的`timeTravel`在循环过程中每执行一次`undo`/`redo`时, `dispatch`了`action`, 继而`react-redux`就会对视图进行一次刷新. 如果`timeTravel`的跨度较大, 就会产生许多次不必要的`rerender`.
+
+      想要解决这个问题需要在调用方法的作用域使用`batch`方法将多次更新合并为一次`commit`, 而`batch`是由`react-redux`提供的, 所以应当是在实现接入`react`生命周期的组件被引入, 于是就额外封装一下底层的`timeTravel`.
+
+      ```ts
+      abstract class UndoRedo extends React.Component {
+        //...
+        timeTravel = (to: number) => {
+          batch(() => {
+            this._history.timeTravel(to)
+          })
+          this.setMemoState() // 下文会实现
+        }
+        undo = () => {
+          this._history.undo()
+          this.setMemoState() // 下文会实现
+        }
+        redo = () => {
+          this._history.redo()
+          this.setMemoState() // 下文会实现
+        }
+      }
+      ```
+
+      同时通过`setState`将`records`等数据接入`react`的生命周期, 收敛到修改状态的回调方法为`timeTravel`,`undo`,`redo`和`createRecord`, 在这些方法的最后额外增加一次带有`memo`的`setState`.
+
+      ```ts
+      abstract class UndoRedo extends React.Component {
+        // 这里需要再 `_history` 下方初始化, 可以直接拿 `_history` 的初始值来初始化 `state`
+        state = { records: this._history.records, current: this._history.current }
+        // 类似 `lodash.memoize`, 通过创建一个闭包缓存入参, 每次调用时顺序地比较每个参数, 全部相等时返回缓存的计算结果
+        // `_history` 的 `records` 已经实现了 `immutable`
+        memoState = createMemo((records: Record[], current: number) => {
+          return { records, current }
+        })
+
+        setMemoState = () => {
+          const { records, current } = this._history
+          const nextState = this.memoState(records, current)
+          if (nextState !== this.state) {
+            this.setState(nextState)
+          }
+        }
+      }
+      ```
+
+      最终将状态通过`Provider`的形式暴露给其他组件
+
+      ```ts
+      abstract class UndoRedo extends React.Component {
+        render() {
+          return (
+            <UndoRedoContext.Provider value={this.state}>
+              {this.props.children}
+            </UndoRedoContext.Provider>
+          )
+        }
+      }
+      ```
+
+- 还有一种方法就是通过`react 18`新增的`useSyncExternalStore`方法将纯`js`对象封装成一个可以返回`state`的`hook`, 对于其他支持`hook`版本的`react`, 可以通过安装`use-sync-external-store`的`npm`依赖来使用该能力
+
+      > 关于`useSyncExternalStore`, 本质也是`useState`和`useEffect`的组合, 具体的原理解析可以参考[这篇文章](https://blog.saeloun.com/2021/12/30/react-18-useSyncExternalStore-api/#understanding-usesyncexternalstore-hook)
+
+1. 将`RTK`回调入参传递给历史记录列表的`react`实现, 且额外注册应用补丁的`reducer`
 
 ---
 
@@ -656,4 +758,6 @@ const todosSlice = createSlice({
 
 ---
 
-### 拓展：与`yjs`配合实现多人协同的撤销回退
+### 拓展(挖坑)
+
+- [ ] **与`yjs`配合实现多人协同的撤销回退**
