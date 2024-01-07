@@ -572,7 +572,7 @@ reducers: {
     }
     ```
 
-    从逻辑图中也能看到, 每一个`record`代表一个`state`, 但是每一次操作产生的`apply (inverse) patches`闭包并不会同时作为同一条`Record`的`undo`和`redo`. 只有新的`record`被生成时, 前一个`record`的`redo`才会被赋值, 所以`redo`才会被定义为`optional`. 一个很符合直觉的解释就是: **你永远不能重做一个最新的状态, 你只能做撤销.**
+    从逻辑图中也能看到, 每一个`record`代表一个`state`, 但是每一次操作产生的`apply (inverse) patches`闭包并不会同时作为同一条`Record`的`undo`和`redo`. 只有新的`record`被生成时, 前一个`record`的`redo`才会被赋值, 所以`redo`才会被定义为`optional`. 一个很符合直觉的解释就是: **你不能重做(区别于再做)一个最新的状态, 你只能做撤销.**
 
     此外, `name`作为元数据输入生成, 而`timeStamp`可以在创建`Record`时立即自动记录.
 
@@ -732,7 +732,7 @@ reducers: {
       }
       ```
 
-      最终将状态通过`Provider`的形式暴露给其他组件
+      最终将状态通过`Provider`的形式暴露给其他组件, 所以该组件通常作为靠近顶层的父节点.
 
       ```ts
       abstract class UndoRedo extends React.Component {
@@ -746,11 +746,18 @@ reducers: {
       }
       ```
 
-- 还有一种方法就是通过`react 18`新增的`useSyncExternalStore`方法将纯`js`对象封装成一个可以返回`state`的`hook`, 对于其他支持`hook`版本的`react`, 可以通过安装`use-sync-external-store`的`npm`依赖来使用该能力
+      **作为组件持有实例的模式存在一个问题, `RTK`作为全局变量管理, `reducer/patch`的一些列方法需要在整个`react`应用(包含`UndoRedo`组件)实例化前进行的声明, 而记录`patches`的方法又需要指向在`UndoRedo`的组件实例内的方法, 于是一个先有鸡还是先有蛋的问题就产生了, 只能通过组件的静态方法来转发, 代价是这个组件只能作为单例运行**
 
-      > 关于`useSyncExternalStore`, 本质也是`useState`和`useEffect`的组合, 具体的原理解析可以参考[这篇文章](https://blog.saeloun.com/2021/12/30/react-18-useSyncExternalStore-api/#understanding-usesyncexternalstore-hook)
+      ```
+      ```
 
-1. 将`RTK`回调入参传递给历史记录列表的`react`实现, 且额外注册应用补丁的`reducer`
+   - 还有一种方法就是通过`react 18`新增的`useSyncExternalStore`方法将纯`js`对象封装成一个可以返回`state`的`hook`, 对于其他支持`hook`版本的`react`, 可以通过安装`use-sync-external-store`的`npm`依赖来使用该能力.
+
+       > 关于`useSyncExternalStore`, 本质也是`useState`和`useEffect`的组合, 具体的原理解析可以参考[这篇文章](https://blog.saeloun.com/2021/12/30/react-18-useSyncExternalStore-api/#understanding-usesyncexternalstore-hook)
+
+    **两种方法相比较, 虽然思路相同, 但更推荐第二种方法, 实现的方法比较优雅.**
+
+2. 将`RTK`回调入参传递给历史记录列表的`react`实现, 且额外注册应用补丁的`reducer`
 
 ---
 
