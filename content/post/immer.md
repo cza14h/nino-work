@@ -561,36 +561,37 @@ reducers: {
       name: string
       undo: ()=> void
       redo?: ()=> void //注意这里是optional
-      timeStamp: Date
+      timestamp: Date
     }
 
-    class Record {
+    class HistoryRecord {
       redo?: () => void
+      timestamp;
       constructor(public name: string, public undo: () => void ) {
-        this.timeStamp = new Date()
+        this.timestamp = new Date()
       }
     }
     ```
 
     从逻辑图中也能看到, 每一个`record`代表一个`state`, 但是每一次操作产生的`apply (inverse) patches`闭包并不会同时作为同一条`Record`的`undo`和`redo`. 只有新的`record`被生成时, 前一个`record`的`redo`才会被赋值, 所以`redo`才会被定义为`optional`. 一个很符合直觉的解释就是: **你不能重做(区别于再做)一个最新的状态, 你只能做撤销.**
 
-    此外, `name`作为元数据输入生成, 而`timeStamp`可以在创建`Record`时立即自动记录.
+    此外, `name`作为元数据输入生成, 而`timestamp`可以在创建`Record`时立即自动记录.
 
 2. 顺着上面的思路, 我们可以推导出历史记录列表的一些能力, 进行历史记录列表的构建
    - 支持生成`record`, 且生成时需要关联上一条记录的`redo` (这也是为什么需要有一个`init state`, 可以避免写一些边界判断)
    - 有一个指针变量用于标识当前的撤销重做位置
 
     ```ts
-    class History {
+    class HistoryPool {
       current = -1 // 因为用于标注真实的`index`, 所以初始为 -1
-      records: Record[] = []
+      records: HistoryRecord[] = []
     }
     ```
 
     当状态发生转移, 创建一条`record`, 此时如果在撤销若干步的某个状态(当前`record`不是最后一个)时`this.current + 1 !== this.records.length`, 需要舍弃后面的所有`record`, 衍生出一条新的状态转移链路. 且赋值目前最后一条`record`的`redo`。
 
     ```ts
-    class History {
+    class HistoryPool {
       // ...
       /**
        * 如本节开篇时阐述的, 这里的`addRecord`也可以设计成直接接收`patches`和`inversePatches`
@@ -603,7 +604,7 @@ reducers: {
           if (draft.length !== nextIndex) {
             draft.splice(nextIndex);
           }
-          draft.push(new Record(name, undo));
+          draft.push(new HistoryRecord(name, undo));
           const currentNode = draft[this.current];
           if (currentNode) {
             currentNode.redo = redo;
@@ -619,7 +620,7 @@ reducers: {
     然后就可以完成历史记录列表的撤销与重做入口, 通过移动`current`来实现.
 
     ```ts
-    class History {
+    class HistoryPool {
       //...
       redo() {
         if (this.current + 1 === this.records.length) return // 最后一条记录不能`redo`
@@ -634,7 +635,7 @@ reducers: {
       timeTravel(to:number){
         if (to === this.current) return;
         const cb = to > this.current ? this.redo : this.undo;
-        const count = Math.abs(to - current);
+        const count = Math.abs(to - this.current);
         for (let i = 0; i < count; i++) {
           cb.call(this);
         }
@@ -645,7 +646,7 @@ reducers: {
 3. 最后可以完善一下构造函数, 将一个初始状态推入数组, 这一步也可由持有历史记录列表实例的上层应用来完成.
 
     ```ts
-    class History {
+    class HistoryPool {
       constructor() {
         this.addRecord('初始化', () => {}, () => {})
       }
@@ -657,12 +658,14 @@ reducers: {
 至此我们已经完成了拓展`RTK`的`patch`回调入口以及原生`js`实现的历史记录列表逻辑, 而`RTK`又是由`react`驱动的`store`, 所以历史记录表作为纯`js`实例, 也需要有一个在`react`中的上层实现才能和`RTK`配合使用.
 
 1. 将历史记录列表实例接入`react`
+  
+    这一部分的功能主要聚焦于`react state`的更新方法对接, `undo`/`redo`等历史记录列表的方法暴露, 以及一些`react`环境下的功能优化
 
    - 一个常见的方法就是通过`react`组件 + 内部实例的方式进行生命周期与方法的暴露, 这里使用一个`abstract class`来抽象一些存在`store`副作用的方法, 保证组件与`store`解耦, 这样的设计是提升组件的通用性, 甚至可以开源出去, 让其他开发者的应用也能通过实现方法来接入自己的`redux store`.
 
       ```ts
       abstract class UndoRedo extends React.Component {
-        private _history = new History()
+        private _history = new HistoryPool()
         abstract getDispatch(actionType: string): Dispatch<AnyAction>
       }
       ```
@@ -718,7 +721,7 @@ reducers: {
         state = { records: this._history.records, current: this._history.current }
         // 类似 `lodash.memoize`, 通过创建一个闭包缓存入参, 每次调用时顺序地比较每个参数, 全部相等时返回缓存的计算结果
         // `_history` 的 `records` 已经实现了 `immutable`
-        memoState = createMemo((records: Record[], current: number) => {
+        memoState = createMemo((records: HistoryRecord[], current: number) => {
           return { records, current }
         })
 
@@ -746,14 +749,76 @@ reducers: {
       }
       ```
 
-      **作为组件持有实例的模式存在一个问题, `RTK`作为全局变量管理, `reducer/patch`的一些列方法需要在整个`react`应用(包含`UndoRedo`组件)实例化前进行的声明, 而记录`patches`的方法又需要指向在`UndoRedo`的组件实例内的方法, 于是一个先有鸡还是先有蛋的问题就产生了, 只能通过组件的静态方法来转发, 代价是这个组件只能作为单例运行**
+      **作为组件持有实例的模式存在一个问题, `RTK`作为全局变量管理, 定义`reducers`的一些列方法(主要是`patch`)需要在整个`react`应用(包含`UndoRedo`组件)实例化前进行的声明, 而记录`patches`的方法又需要指向在`UndoRedo`的组件实例内的方法, 于是一个先有鸡还是先有蛋的问题就产生了, 只能通过组件的静态方法来转发, 代价是这个组件只能作为单例运行**
 
-      ```
+      ```ts
+      abstract class UndoRedo extends React.Component {
+        static interface = {}
+        constructor(props: any) {
+          super(props);
+          UndoRedo.interface = {
+            redo: this.redo,
+            undo: this.undo,
+            createRecord: this.createRecord,
+            timeTravel: this.timeTravel,
+          };
+      }
       ```
 
    - 还有一种方法就是通过`react 18`新增的`useSyncExternalStore`方法将纯`js`对象封装成一个可以返回`state`的`hook`, 对于其他支持`hook`版本的`react`, 可以通过安装`use-sync-external-store`的`npm`依赖来使用该能力.
 
-       > 关于`useSyncExternalStore`, 本质也是`useState`和`useEffect`的组合, 具体的原理解析可以参考[这篇文章](https://blog.saeloun.com/2021/12/30/react-18-useSyncExternalStore-api/#understanding-usesyncexternalstore-hook)
+       > 关于`useSyncExternalStore`, 可以看成是`useState`和`useEffect`的组合, 具体的原理解析可以参考[这篇文章](https://blog.saeloun.com/2021/12/30/react-18-useSyncExternalStore-api/#understanding-usesyncexternalstore-hook)
+
+      使用`useSyncExternalStore`的外部状态仓库对象需要实现`subscribe`方法, 然后接收一个闭包`getSnapshot`用于的返回调用`useSyncExternalStore`这个`hook`的组件需要的状态. 于是需要改造一下历史记录列表, 首先让`store`支持订阅, 我们简单的维护一个`Set`用来存放订阅回调即可.
+
+      ```ts
+      class UndoRedoStore extends HistoryPool {
+        subscriptions = new Set<() => void>();
+        subscribe = (onStoreChange: () => void) => {
+          this.subscriptions.add(onStoreChange);
+          return () => {
+            this.subscriptions.delete(onStoreChange);
+          };
+        };
+      }
+      ```
+
+      然后需要实现`getState`用于封装`useSyncExternalStore`中`getSnapshot`, 其实就是描述当前`store`暴露的状态, 和**方法1**中定义的`state`类似, 也是返回一个遵循`immutable`更新过程的数据变量. 相应的原先`setMemoState`的功能为**计算内部`state`**和**通知`react`更新**, 这里由于计算`state`的过程由`getState`实现, `setMemoState`的逻辑也简化为通知`react`更新, 只不过不同于使用`setState`, 这里使用`subscription`中存储的`onStoreChange`来实现.
+      > 这里取名为`setMemoState`其实有点不恰当, 但是是为了标识这个方法的调用时机与**方法1**中一致, 故保持命名相同
+
+      ```ts
+      class UndoRedoStore extends HistoryPool {
+        // ...
+        memoState = createMemo((records: HistoryRecord[], current: number) => {
+          return { records, current };
+        });
+        getState = () => {
+          return this.memoState(this.records, this.current);
+        };
+        setMemoState() {
+          this.subscriptions.forEach((cb) => {
+            cb();
+          });
+        }
+      }
+      ```
+
+      **方法1**中用`batch`重写的`timeTravel`和`createRecord`方法也需要在这个方式下实现. 需要注意的是, 这里可以通过构造函数传入`getDispatch`方法来注入, 当然也可以像**方法1**一样使用`abstract class`.
+      > **方法1**中当然也可以直接把`getDispatch`作为构造参数传入, 不这么做的原因是, 作者习惯于将`react`的`props`开放给运行时需要响应式的变量, 而一些静态的参数则通过工厂, 类重写的方式, 让应用省去更新追踪响应式的过程(`memo`等).
+
+      ```ts
+      class UndoRedoStore extends HistoryPool {
+        constructor(public getDispatch:()=>Dispatch){}
+
+        timeTravel = (to: number) => {
+          batch(() => {
+            super.timeTravel(to);
+          });
+        };
+
+      }
+
+      ```
 
     **两种方法相比较, 虽然思路相同, 但更推荐第二种方法, 实现的方法比较优雅.**
 
