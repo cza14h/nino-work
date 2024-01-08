@@ -657,7 +657,29 @@ reducers: {
 
 至此我们已经完成了拓展`RTK`的`patch`回调入口以及原生`js`实现的历史记录列表逻辑, 而`RTK`又是由`react`驱动的`store`, 所以历史记录表作为纯`js`实例, 也需要有一个在`react`中的上层实现才能和`RTK`配合使用.
 
-1. 将历史记录列表实例接入`react`
+1. 在`RTK`实现应用补丁的`reducer`.
+
+    在`zundo`中, 修改`store`的状态是通过闭包获取到`set`方法后, 可以在中间件内部拿到快照并直接操作外部`store`, 而`RTK`中的`middleware`是传统的`next`洋葱模型(?存疑, 未考证), 能拦截的只有`getState`,`dispatch`和`action`, 因此需要一个专有的`reducer`来进行状态转移(应用补丁)
+
+    在构造`slice`时, 定义一个`applyRecord`(名字随意)的`reducer`, `payload`接收`patch[]`, 且通过`immer`提供的`applyPatches`来应用补丁. 每次`redo`/`unodo`, 最终都激活这个`applyRecord`的`reducer`, 把`patches`或`inversePatches`传给他完成状态补丁更新.
+
+    ```ts
+    import { Patch, applyPatches } from 'immer';
+    //...
+
+    const mySliceWithPatch = createSlice({
+      name: 'mySliceWithPatch',
+      initialState: { counter: 0 },
+      reducers: {
+        applyRecord(state, action: { type:string, payload: Patch[]}){
+          return applyPatches(state, action.payload)
+        },
+        increment: {/***/}
+      }
+    })
+    ```
+
+2. 将历史记录列表实例接入`react`
   
     这一部分的功能主要聚焦于`react state`的更新方法对接, `undo`/`redo`等历史记录列表的方法暴露, 以及一些`react`环境下的功能优化
 
@@ -670,17 +692,19 @@ reducers: {
       }
       ```
 
-      `createRecord`方法实现了将`patches`封入闭包的过程, 传入的`actionType`是应用补丁`reducer`的`actionType`, 而非触发状态转移的`reducer`的`actionType`
+      `createRecord`方法实现了将`patches`封入闭包的过程, 传入的`actionType`是应用补丁`reducer`(上文中为`mySliceWithPatch/applyRecord`)的`actionType`, 而非触发状态转移的`reducer`的`actionType`. 传入`actionType`会更灵活一点,可以在不同的`slice`/`store`之前共享一个历史记录列表实例, 通过`getDispatch`来触发不同`slice`/`store`中的`applyRecord reducer`.
 
       ```ts
       abstract class UndoRedo extends React.Component {
         //...
-        createRecord(name:string, patches: Patch[], inversePatches: Patch[], actionType: string){
+        createRecord = (name:string, patches: Patch[], inversePatches: Patch[], actionType: string) => {
           const dispatch = this.getDispatch(actionType)
           const redo = () => {
+            // 这里的 `action` 就是上文 `applyRecord` `reducer`所需要的的`action`数据格式.
             dispatch({ action: actionType, payload: patches });
           };
           const undo = () => {
+            // 这里的 `action` 就是上文 `applyRecord` `reducer`所需要的的`action`数据格式.
             dispatch({ action: actionType, payload: inversePatches });
           };
           this._history.addRecord(name, redo, undo)
@@ -803,26 +827,103 @@ reducers: {
       }
       ```
 
-      **方法1**中用`batch`重写的`timeTravel`和`createRecord`方法也需要在这个方式下实现. 需要注意的是, 这里可以通过构造函数传入`getDispatch`方法来注入, 当然也可以像**方法1**一样使用`abstract class`.
+      **方法1**中用`batch`重写的`timeTravel`和`createRecord`方法也需要在这个方式下实现, 顺便吧`undo`和`redo`也一起实现了. 需要注意的是, 这里可以通过构造函数传入`getDispatch`方法来注入, 当然也可以像**方法1**一样使用`abstract class`.
       > **方法1**中当然也可以直接把`getDispatch`作为构造参数传入, 不这么做的原因是, 作者习惯于将`react`的`props`开放给运行时需要响应式的变量, 而一些静态的参数则通过工厂, 类重写的方式, 让应用省去更新追踪响应式的过程(`memo`等).
 
       ```ts
       class UndoRedoStore extends HistoryPool {
-        constructor(public getDispatch:()=>Dispatch){}
+        constructor(public getDispatch:()=> Dispatch) {}
 
         timeTravel = (to: number) => {
           batch(() => {
+            // 变成super.timeTravel
             super.timeTravel(to);
           });
         };
+        
+        undo = () => {
+          super.undo() // 变成super.undo
+          this.setMemoState()
+        }
 
+        redo = () => {
+          super.redo() // 变成super.redo
+          this.setMemoState()
+        }
+
+        createRecord = (name:string, patches: Patch[], inversePatches: Patch[], actionType: string) {
+          //...和方法1一样
+        }
       }
+      ```
+
+      然后通过使用`useSyncExternalStore`来封装成一个`hook`, 这里就拟实现一个支持传入回调来获取历史记录列表状态的`hook`
+
+      ```ts
+      const historyRef = { current: null }
+      // 使用`historyRef` 来创建 `slice`, 用途和方法1的静态类一样, 下文会讲
+      const RTKStore = configureStore({ reducer: slice.reducer })
+      const historyStore = historyRef.current = new UndoRedoStore(() => RTKStore.dispatch)
+
+      type HistoryStoreState = ReturnType<typeof historyStore.getState>
+
+      const useHistorySelector = <RES,>(selector: (s: HistoryStoreState) => RES) => {
+        return useSyncExternalStore<RES>(historyStore.subscribe,() => selector(historyStore.getState()))
+      }
+
+      // 简单封装一下
+      const createHistoryStore = (getDispatch: (actionType:string) => Dispatch) => {
+        const store = new UndoRedoStore(getDispatch)
+        const useSelector = <RES,>(selector: (s: HistoryStoreState) => RES) => {
+          return useSyncExternalStore<RES>(store.subscribe,() => selector(store.getState()))
+        }
+        return { store, useSelector }
+      }
+
 
       ```
 
-    **两种方法相比较, 虽然思路相同, 但更推荐第二种方法, 实现的方法比较优雅.**
+    **两种方法相比较, 虽然思路相同, 但更推荐第二种方法, 实现的方法比较优雅. 也没有引入额外的`Context`**
 
-2. 将`RTK`回调入参传递给历史记录列表的`react`实现, 且额外注册应用补丁的`reducer`
+3. 将`RTK`回调入参传递给历史记录列表的`react`实现, 其实只需要直接将参数传入`createRecord`方法即可, 但是会存在一个循环引用的问题
+  
+    **方式1**中由于组件的静态方法是个对象, 并且在组件实例化后会把相应的实例方法挂载上去, 所以在我们用`createSlice`定义`patch`函数的时候, 就可以通过创建闭包来形成懒取值来避免循环引用, 这个问题在**方式2**的实现中更加直观
+
+    ```ts
+    const mySliceWithPatch = createSlice({
+      name: 'mySliceWithPatch',
+      initialState: { counter: 0 },
+      reducers: {
+        applyRecord(state, action: PayloadAction<Patch[]>){
+          //...
+        }
+
+        increment: {
+          reducer(state, action) {
+            state.counter = state.counter + 1
+          },
+          patch(patch, inversePatch, action) {
+            // 这里就需要有`historyStore`的实例了
+            historyStore.createRecord("计数增加", patch, inversePatch, 'mySliceWithPatch/applyRecord')
+          }
+        }
+      }
+    })
+    const RTKStore = configureStore({ reducer: mySliceWithPatch.reducer })
+    // 但是这里才刚刚初始化, 因为需要接收`store`的dispatch
+    const { store: historyStore, useSelector } = createHistoryStore(() => RTKStore.dispatch)
+    ```
+
+    于是才引入了`historyRef`和`UndoRedo.interface`作转发, 修改`patch`中的方法调用为
+
+    ```diff
+    patch(patch, inversePatch, action) {
+    - historyStore.createRecord("计数增加", patch, inversePatch)
+    + historyRef.current?.createRecord("计数增加", patch, inversePatch)
+      // 或者
+    + UndoRedo.interface?.createRecord("计数增加", patch, inversePatch)
+    }
+    ```
 
 ---
 
