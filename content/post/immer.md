@@ -687,12 +687,12 @@ reducers: {
         createRecord = (name:string, patches: Patch[], inversePatches: Patch[], actionType: string) => {
           const dispatch = this.getDispatch(actionType)
           const redo = () => {
-            // 这里的 `action` 就是上文 `applyRecord` `reducer`所需要的的`action`数据格式.
-            dispatch({ action: actionType, payload: patches });
+            // 这里的 `type` 就是上文 `applyRecord` `reducer`所需要的的`action`数据格式.
+            dispatch({ type: actionType, payload: patches });
           };
           const undo = () => {
-            // 这里的 `action` 就是上文 `applyRecord` `reducer`所需要的的`action`数据格式.
-            dispatch({ action: actionType, payload: inversePatches });
+            // 这里的 `type` 就是上文 `applyRecord` `reducer`所需要的的`action`数据格式.
+            dispatch({ type: actionType, payload: inversePatches });
           };
           this._history.addRecord(name, redo, undo)
           this.setMemoState() // 下文会实现
@@ -760,7 +760,7 @@ reducers: {
       }
       ```
 
-      ##### 这里存在一个问题, `RTK`作为全局变量管理, 定义`reducers`的一些列方法(主要是`patch`)需要在整个`react`应用(包含`UndoRedo`组件)实例化前进行的声明, 而记录`patches`的方法又需要指向在`UndoRedo`的组件实例内的方法, 于是一个先有鸡还是先有蛋的问题就产生了, 只能通过组件的静态方法来转发, 代价是这个组件只能作为单例运行 
+      **这里存在一个问题, `RTK`作为全局变量管理, 定义`reducers`的一些列方法(主要是`patch`)需要在整个`react`应用(包含`UndoRedo`组件)实例化前进行的声明, 而记录`patches`的方法又需要指向在`UndoRedo`的组件实例内的方法, 于是一个先有鸡还是先有蛋的问题就产生了, 只能通过组件的静态方法来转发, 代价是这个组件只能作为单例运行**
 
       ```ts
       abstract class UndoRedo extends React.Component {
@@ -859,7 +859,7 @@ reducers: {
       }
 
       // 简单封装一下
-      const createHistoryStore = (getDispatch: (actionType:string) => Dispatch = (s) => s) => {
+      const createHistoryStore = (getDispatch: (actionType:string) => Dispatch) => {
         const store = new UndoRedoStore(getDispatch)
         const useSelector = <RES,>(selector: (s: HistoryStoreState) => RES) => {
           return useSyncExternalStore<RES>(store.subscribe,() => selector(store.getState()))
@@ -900,6 +900,7 @@ reducers: {
     // 但是这里才刚刚初始化, 因为需要接收`store`的dispatch
     const { store: historyStore, useSelector } = createHistoryStore(() => RTKStore.dispatch)
     ```
+
     如果用**方式1**的模式来初始化:
 
     ```ts
@@ -922,31 +923,34 @@ reducers: {
     + UndoRedo.interface?.createRecord("计数增加", patch, inversePatch)
     }
     ```
-4. DONE, 至此改造已经全部完成, 具体组件在应用中的使用可以通过`useSelector`或者`useContext`来获取历史记录的状态, 这里给出一个具体的应用组件实现方案
-   ```ts
+
+4. DONE, 至此改造已经全部完成, 具体组件在应用中的使用可以通过`useSelector`或者`useContext`来获取历史记录的状态, 这里给出一个具体的应用组件实现方案, 完整的示例demo在[这里](https://stackblitz.com/edit/react-ts-3uqzdd)
+
+   ```tsx
    import { useHistorySelector, historyStore } from '@/store'
 
    const HistoryViewBox = () => {
-     const { current, records } = useHistorySelector()
-     const canRedo = useMemo(() => {
-       return records.length - 1 !== current
-     }, [records, current])
-     const canUndo = useMemo(() => {
-       return current !== 0
-     }, [current])
+    const { current, records } = useHistorySelector((s) => s);
+    const canRedo = React.useMemo(() => {
+      return records.length - 1 !== current;
+    }, [records, current]);
+    const canUndo = React.useMemo(() => {
+      return current !== 0;
+    }, [current]);
      return (
        <div>
-         <div>
-           <div>历史记录</div>
-           <div style={{opacity: canUndo? 1 : 0.3}} onClick={historyStore.undo}>↻</div>
-           <div style={{opacity: canRedo? 1 : 0.3}} onClick={historyStore.redo}>↺</div>
-         </div>
-         {records.map((record,i) => {
-           return <div
-             onClick={()=>{historyStore.timeTravel(i)}}>
-               <span>{record.name}</span><span>{record.timestamp}</span>
-             </div>
-         })}
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <div>历史记录</div>
+          <div style={{opacity: canUndo? 1 : 0.3}} onClick={historyStore.undo}>↻</div>
+          <div style={{opacity: canRedo? 1 : 0.3}} onClick={historyStore.redo}>↺</div>
+        </div>
+        {records.map((record,i) => {
+          return <div
+            style={{ display: 'flex', justifyContent: 'space-between' }}
+            onClick={()=>{historyStore.timeTravel(i)}}>
+              <span>{record.name}</span><span>{record.timestamp.toLocaleTimeString()}</span>
+            </div>
+        })}
        </div>
      )
    }
@@ -956,6 +960,8 @@ reducers: {
 ---
 
 ### 总结
+
+文章分析了作者在前端历史记录的实现方式上的学习成果, 介绍了诸如差分, 快照, 不可变性等概念. 并且分别对两种实现方式进行了解读并给出了一些应用场景选型的建议. 在解读源码的同时也基于`immer`对`RTK`进行了改造, 实现了一个基于差分的撤销与重做, 对已经再用`RTK`且有撤销重做需求的项目也算得上是一个改造成本较低的方案.
 
 ---
 
