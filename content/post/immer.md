@@ -474,11 +474,8 @@ reducers: {
 
 3. 在改造`createSlice.ts`支持我们设计的额外回调入口后, 需要改造`createRedcuer.ts`让我们传入的`patch`在运行时真正生效.
 
-    > 通过调用同名函数`createReducer`将`createSlice`中收集到的`caseReducers`的集合(`sliceCaseReducersByType`)封入一个闭包函数, 并在运行时动态地过滤出`action`对应的`caseReducer`并执行(来模拟传统`redux`中`reducer`的`switch-case`). 这里是运行时调用的入口, 也是`RTK`借用`immer`能力的地方, 需要在这里显示开启`enablePatches`, 并且还要在`createReducer`的方法中需要接收刚刚解析的 `sliceCasePatchersByType`.
-
-    ```diff
-
-    1. 首先开启`immer`相关的api, 把需要定义的类型也导入
+    > 通过调用同名函数`createReducer`将`createSlice`中收集到的`caseReducers`的集合(`sliceCaseReducersByType`)封入一个闭包函数, 并在运行时动态地过滤出`action`对应的`caseReducer`并执行(来模拟传统`redux`中`reducer`的`switch-case`).
+    > 这里是运行时调用的入口, 也是`RTK`借用`immer`能力的地方, 需要在这里显示开启`enablePatches`, 并且还要在`createReducer`的方法中需要接收刚刚解析的 `sliceCasePatchersByType`.
 
     ```diff
     /**
