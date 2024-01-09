@@ -863,7 +863,7 @@ reducers: {
       }
 
       // 简单封装一下
-      const createHistoryStore = (getDispatch: (actionType:string) => Dispatch) => {
+      const createHistoryStore = (getDispatch: (actionType:string) => Dispatch = (s) => s) => {
         const store = new UndoRedoStore(getDispatch)
         const useSelector = <RES,>(selector: (s: HistoryStoreState) => RES) => {
           return useSyncExternalStore<RES>(store.subscribe,() => selector(store.getState()))
@@ -876,7 +876,7 @@ reducers: {
 
     **两种方法相比较, 虽然思路相同, 但更推荐第二种方法, 实现的方法比较优雅. 也没有引入额外的`Context`**
 
-3. 将`RTK`回调入参传递给历史记录列表的`react`实现, 其实只需要直接将参数传入`createRecord`方法即可, 但是会存在一个循环引用的问题
+3. 将`RTK`回调入参传递给历史记录列表的`react`实现, 其实只需要直接将参数传入`createRecord`方法即可, 但是也是会存在上文提到循环引用的问题.
   
     **方式1**中由于组件的静态方法是个对象, 并且在组件实例化后会把相应的实例方法挂载上去, 所以在我们用`createSlice`定义`patch`函数的时候, 就可以通过创建闭包来形成懒取值来避免循环引用, 这个问题在**方式2**的实现中更加直观
 
@@ -909,7 +909,7 @@ reducers: {
     ```ts
     const RTKStore = configureStore({ reducer: mySliceWithPatch.reducer })
     class UndoRedoImpl extends UndoRedo {
-      getDispatch(){
+      getDispatch(actionType: string){
         return RTKStore.dispatch
       }
     }
@@ -926,6 +926,36 @@ reducers: {
     + UndoRedo.interface?.createRecord("计数增加", patch, inversePatch)
     }
     ```
+4. DONE, 至此改造已经全部完成, 具体组件在应用中的使用可以通过`useSelector`或者`useContext`来获取历史记录的状态, 这里给出一个具体的应用组件实现方案
+   ```ts
+   import { useHistorySelector, historyStore } from '@/store'
+
+   const HistoryViewBox = () => {
+     const { current, records } = useHistorySelector()
+     const canRedo = useMemo(() => {
+       return records.length - 1 !== current
+     }, [records, current])
+     const canUndo = useMemo(() => {
+       return current !== 0
+     }, [current])
+     return (
+       <div>
+         <div>
+           <div>历史记录</div>
+           <div onClick={historyStore.undo}>↻</div>
+           <div onClick={historyStore.redo}>↺</div>
+         </div>
+         {records.map((record,i) => {
+           return <div
+             onClick={()=>{historyStore.timeTravel(i)}}>
+               <span>{record.name}</span><span>{record.timestamp}</span>
+             </div>
+         })}
+       </div>
+     )
+   }
+   
+   ```
 
 ---
 
