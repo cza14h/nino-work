@@ -411,23 +411,7 @@ reducers: {
 `RTK`的源码拆分比较灵活,我们可以通过实现自己的`createSlice`, `createReducer`等接口来替换原本的功能,做到最小程度的改动
 > 本文基于`@reduxjs/toolkit@1.8.6`版本进行改造, 后续官方包的破坏性更新可能会导致不可用, 但源码的改造思路应该不会受到影响.
 
-1. 首先开启`immer`相关的api, 把需要定义的类型也导入
-
-    ```diff
-    /**
-    * @see https://github.com/reduxjs/redux-toolkit/blob/f7689133ee56e7787447e6089907fa6d1639b771/packages/toolkit/src/createReducer.ts#L1
-    * */
-    - import type { Draft } from 'immer'
-    - import createNextState, { isDraft, isDraftable, enableES5 } from 'immer'
-    + import type { Draft, Patch } from 'immer'
-    + import createNextState, { isDraft, isDraftable, enableES5, enablePatches } from 'immer'
-      import type { AnyAction, Action, Reducer } from 'redux'
-    ...
-    + enablePatches();
-
-    ```
-
-2. 然后修改对应的配置类型标注让`ts`能正确推导, 原有的`reducers`配置定义存放在`createSlice.ts#L227`的`ValidateSliceCaseReducers`类型,
+1. 首先从类型定义入手, 修改对应的配置类型标注让`ts`能正确推导, 原有的`reducers`配置定义存放在`createSlice.ts#L227`的`ValidateSliceCaseReducers`类型,
 
     ```ts
     /**
@@ -466,7 +450,7 @@ reducers: {
 
     ```
 
-3. 在`createSlice`解析配置时, 也要像`caseReducer`一样, 将所有的`patch`收集起来, 为了命名一致, 也叫它`casePatcher`. `CasePatcher`类型就是刚刚定义的`patch`方法类型, 并且在接下来解析`slice`中的`reducer`和`prepare`中额外添加记录`patch`的能力. 当然`Record<string,CasePatcher>`中的`key`也保持一致, 同为 ``${slice}/${actionKey}``
+2. 在`createSlice`解析配置时, 也要像`caseReducer`一样, 将所有的`patch`收集起来, 为了命名一致, 也叫它`casePatcher`. `CasePatcher`类型就是刚刚定义的`patch`方法类型, 并且在接下来解析`slice`中的`reducer`和`prepare`中额外添加记录`patch`的能力. 当然`Record<string,CasePatcher>`中的`key`也保持一致, 同为 ``${slice}/${actionKey}``
 
     ```diff
     /**
@@ -488,11 +472,26 @@ reducers: {
     } else {
     ```
 
-4. 在改造`createSlice.ts`支持我们设计的额外回调入口后, 需要改造`createRedcuer.ts`让我们传入的`patch`在运行时真正生效.
+3. 在改造`createSlice.ts`支持我们设计的额外回调入口后, 需要改造`createRedcuer.ts`让我们传入的`patch`在运行时真正生效.
 
-    > 通过调用同名函数`createReducer`将`createSlice`中收集到的`caseReducers`的集合(`sliceCaseReducersByType`)封入一个闭包函数, 并在运行时动态地过滤出`action`对应的`caseReducer`并执行(来模拟传统`redux`中`reducer`的`switch-case`). 这里是运行时调用的入口, 也是`RTK`借用`immer`能力的地方, 所以除了上文提到的需要显示开启`enablePatches`外, 还要在`createReducer`的方法中需要接收刚刚解析的 `sliceCasePatchersByType`.
+    > 通过调用同名函数`createReducer`将`createSlice`中收集到的`caseReducers`的集合(`sliceCaseReducersByType`)封入一个闭包函数, 并在运行时动态地过滤出`action`对应的`caseReducer`并执行(来模拟传统`redux`中`reducer`的`switch-case`). 这里是运行时调用的入口, 也是`RTK`借用`immer`能力的地方, 需要在这里显示开启`enablePatches`, 并且还要在`createReducer`的方法中需要接收刚刚解析的 `sliceCasePatchersByType`.
 
     ```diff
+
+    1. 首先开启`immer`相关的api, 把需要定义的类型也导入
+
+    ```diff
+    /**
+    * @see https://github.com/reduxjs/redux-toolkit/blob/f7689133ee56e7787447e6089907fa6d1639b771/packages/toolkit/src/createReducer.ts#L1
+    * */
+    - import type { Draft } from 'immer'
+    - import createNextState, { isDraft, isDraftable, enableES5 } from 'immer'
+    + import type { Draft, Patch } from 'immer'
+    + import createNextState, { isDraft, isDraftable, enableES5, enablePatches } from 'immer'
+      import type { AnyAction, Action, Reducer } from 'redux'
+    ...
+    + enablePatches();
+    ...
     /**
      * @see https://github.com/reduxjs/redux-toolkit/blob/f7689133ee56e7787447e6089907fa6d1639b771/packages/toolkit/src/createReducer.ts#L276
      **/
@@ -514,7 +513,7 @@ reducers: {
 
     ```
 
-5. DONE! 至此已完成了所有的源码改动, 得益于`RTK`优秀的代码功能拆分和`immer`的补丁能力, 让我们用不到40行的修改就完成了对原有功能的扩展, 具体的使用方式:
+4. DONE! 至此已完成了所有的源码改动, 得益于`RTK`优秀的代码功能拆分和`immer`的补丁能力, 让我们用不到40行的修改就完成了对原有功能的扩展, 具体的使用方式:
 
     ```ts
     import { configureStore } from "@reduxjs/toolkit"
