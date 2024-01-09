@@ -557,19 +557,10 @@ reducers: {
 1. 首先我们定义一个`record`的类型用来指代`state`的状态, 存放一些撤销与回退的方法
 
     ```ts
-    type RecordType = {
-      name: string
-      undo: ()=> void
-      redo?: ()=> void //注意这里是optional
-      timestamp: Date
-    }
-
     class HistoryRecord {
-      redo?: () => void
-      timestamp;
-      constructor(public name: string, public undo: () => void ) {
-        this.timestamp = new Date()
-      }
+      redo?: () => void //注意这里是optional
+      timestamp = new Date()
+      constructor(public name: string, public undo: () => void ) {}
     }
     ```
 
@@ -615,7 +606,7 @@ reducers: {
     }
     ```
 
-    要注意这里`addRecord`方法的 `redo` 和 `undo`闭包是由一次状态转移产生的`patches`和`inversePatches`构建而来的. 一个补全列表尾部`record`的`redo`, 一个用于直接构建新的`record`.
+    这里`addRecord`方法的 `redo` 和 `undo`闭包是由一次状态转移产生的`patches`和`inversePatches`构建而来的. 一个补全列表尾部`record`的`redo`, 一个用于直接构建新的`record`.
 
     然后就可以完成历史记录列表的撤销与重做入口, 通过移动`current`来实现.
 
@@ -659,7 +650,7 @@ reducers: {
 
 1. 在`RTK`实现应用补丁的`reducer`.
 
-    在`zundo`中, 修改`store`的状态是通过闭包获取到`set`方法后, 可以在中间件内部拿到快照并直接操作外部`store`, 而`RTK`中的`middleware`是传统的`next`洋葱模型(?存疑, 未考证), 能拦截的只有`getState`,`dispatch`和`action`, 因此需要一个专有的`reducer`来进行状态转移(应用补丁)
+    在`zundo`中, 修改`store`的状态是通过闭包获取到`set`方法后, 可以在中间件内部拿到快照并直接操作外部`store`, 而`RTK`中即使是`middleware`能拦截的只有`getState`,`dispatch`和`action`, 因此需要一个专有的`reducer`来配合特定的`action`进行状态转移(应用补丁)
 
     在构造`slice`时, 定义一个`applyRecord`(名字随意)的`reducer`, `payload`接收`patch[]`, 且通过`immer`提供的`applyPatches`来应用补丁. 每次`redo`/`unodo`, 最终都激活这个`applyRecord`的`reducer`, 把`patches`或`inversePatches`传给他完成状态补丁更新.
 
@@ -683,7 +674,7 @@ reducers: {
   
     这一部分的功能主要聚焦于`react state`的更新方法对接, `undo`/`redo`等历史记录列表的方法暴露, 以及一些`react`环境下的功能优化
 
-   - 一个常见的方法就是通过`react`组件 + 内部实例的方式进行生命周期与方法的暴露, 这里使用一个`abstract class`来抽象一些存在`store`副作用的方法, 保证组件与`store`解耦, 这样的设计是提升组件的通用性, 甚至可以开源出去, 让其他开发者的应用也能通过实现方法来接入自己的`redux store`.
+   - **方式1** 一个常见的方法就是通过`react`组件 + 内部实例的方式进行生命周期与方法的暴露, 这里使用一个`abstract class`来抽象一些存在`store`副作用的方法, 保证组件与`store`解耦, 这样的设计是提升组件的通用性, 甚至可以开源出去, 让其他开发者的应用也能通过实现方法来接入自己的`redux store`.
 
       ```ts
       abstract class UndoRedo extends React.Component {
@@ -773,7 +764,7 @@ reducers: {
       }
       ```
 
-      **作为组件持有实例的模式存在一个问题, `RTK`作为全局变量管理, 定义`reducers`的一些列方法(主要是`patch`)需要在整个`react`应用(包含`UndoRedo`组件)实例化前进行的声明, 而记录`patches`的方法又需要指向在`UndoRedo`的组件实例内的方法, 于是一个先有鸡还是先有蛋的问题就产生了, 只能通过组件的静态方法来转发, 代价是这个组件只能作为单例运行**
+      ##### 这里存在一个问题, `RTK`作为全局变量管理, 定义`reducers`的一些列方法(主要是`patch`)需要在整个`react`应用(包含`UndoRedo`组件)实例化前进行的声明, 而记录`patches`的方法又需要指向在`UndoRedo`的组件实例内的方法, 于是一个先有鸡还是先有蛋的问题就产生了, 只能通过组件的静态方法来转发, 代价是这个组件只能作为单例运行 
 
       ```ts
       abstract class UndoRedo extends React.Component {
@@ -789,7 +780,7 @@ reducers: {
       }
       ```
 
-   - 还有一种方法就是通过`react 18`新增的`useSyncExternalStore`方法将纯`js`对象封装成一个可以返回`state`的`hook`, 对于其他支持`hook`版本的`react`, 可以通过安装`use-sync-external-store`的`npm`依赖来使用该能力.
+   - **方式2** 还有一种方法就是通过`react 18`新增的`useSyncExternalStore`方法将纯`js`对象封装成一个可以返回`state`的`hook`, 对于其他支持`hook`版本的`react`, 可以通过安装`use-sync-external-store`的`npm`依赖来使用该能力.
 
        > 关于`useSyncExternalStore`, 可以看成是`useState`和`useEffect`的组合, 具体的原理解析可以参考[这篇文章](https://blog.saeloun.com/2021/12/30/react-18-useSyncExternalStore-api/#understanding-usesyncexternalstore-hook)
 
@@ -896,7 +887,7 @@ reducers: {
       reducers: {
         applyRecord(state, action: PayloadAction<Patch[]>){
           //...
-        }
+        },
 
         increment: {
           reducer(state, action) {
@@ -912,6 +903,17 @@ reducers: {
     const RTKStore = configureStore({ reducer: mySliceWithPatch.reducer })
     // 但是这里才刚刚初始化, 因为需要接收`store`的dispatch
     const { store: historyStore, useSelector } = createHistoryStore(() => RTKStore.dispatch)
+    ```
+    如果用**方式1**的模式来初始化:
+
+    ```ts
+    const RTKStore = configureStore({ reducer: mySliceWithPatch.reducer })
+    class UndoRedoImpl extends UndoRedo {
+      getDispatch(){
+        return RTKStore.dispatch
+      }
+    }
+    // ...然后在组件中使用`UndoRedoImpl`
     ```
 
     于是才引入了`historyRef`和`UndoRedo.interface`作转发, 修改`patch`中的方法调用为
