@@ -942,8 +942,8 @@ reducers: {
        <div>
          <div>
            <div>历史记录</div>
-           <div onClick={historyStore.undo}>↻</div>
-           <div onClick={historyStore.redo}>↺</div>
+           <div style={{opacity: canUndo? 1 : 0.3}} onClick={historyStore.undo}>↻</div>
+           <div style={{opacity: canRedo? 1 : 0.3}} onClick={historyStore.redo}>↺</div>
          </div>
          {records.map((record,i) => {
            return <div
