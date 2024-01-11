@@ -16,7 +16,7 @@ tags:
 
 由于应用是使用`react`作为视图框架, 所以本文都会围绕着`react`的生态来实现相关的功能
 
-***文章大纲***
+**文章大纲**
 
 - [前置知识](#前置知识)
   - [快照](#快照)
@@ -33,6 +33,15 @@ tags:
   - [实现历史记录列表](#实现历史记录列表)
   - [接入react, 配合RTK实现撤销重做](#接入react-配合rtk实现撤销重做)
 - [总结](#总结)
+
+#### 高频名词与缩写
+
+- immutable: 一种数据更新规范, 通过更新引用数据类型地址来标注引用类型变量的修改
+- zustand: 一个状态管理库, 常被视作redux的替代品. 以回调而非`redux action`字符串为驱动单位.
+- zundo: `zustand`的一个中间件, 用于实现单个状态仓库的撤销重做.
+- RTK: `@reduxjs/toolkit`的缩写, 一个用于简化与封装`redux`的全局状态管理仓库定义的工具.
+- patch/patches: 由于在本文中出现次数极多, 故定义`patch`特指同名回调函数, `patches`特指差分补丁数据
+- useSyncExternalStore: 用于把外部状态仓库接入到`react`更新周期的`hook`
 
 ---
 
@@ -80,7 +89,7 @@ tags:
 
 ![zundo](/post/immer/zundo.png)
 
-> 简单描述下`zustand`,可以理解成一个不需要写`actionType`的版本的`hooks`风格的`redux`
+> 简单描述下`zustand`, 可以理解成一个不需要写`actionType`的版本的`hooks`风格的`redux`.
 
 ```tsx
 import { create } from 'zustand'
@@ -319,7 +328,7 @@ const counterSlice = createSlice({
 
 #### 补丁数据
 
-撤销重做的核心就是正向与逆向的补丁数据,在每次修改`state`后,可以通过类似`microdiff`这类的库,通过交换顺序对前后两个状态之间进行计算正向与反向的`patch`, 这样的设计需要侵入并拦截状态管理库的数据的`setter`过程,例如传统的`redux`则就需要在每个`reducer`中显式的实现, 就没有那么优雅.
+撤销重做的核心就是正向与逆向的补丁数据,在每次修改`state`后,可以通过类似`microdiff`这类的库,通过交换顺序对前后两个状态之间进行计算正向与反向的`patches`, 这样的设计需要侵入并拦截状态管理库的数据的`setter`过程,例如传统的`redux`则就需要在每个`reducer`中显式的实现, 就没有那么优雅.
 
 好消息是,常用的不可变库`immer`, 其实就提供了这个记录补丁数据的能力, 包括正向与逆向, 只是该功能默认不开启。而`RTK`对`redux`的封装正是基于`immer`来实现的
 
@@ -373,13 +382,13 @@ expect(lastState).toEqual({
 })
 ```
 
-于是我们撤销重做的改造就会围绕着这两份`patch`数据进行
+于是我们撤销重做的改造就会围绕着这两份`patches`数据进行
 
 <!-- 至此`immer`已经帮我们完成了最难的一部分, 而`@reduxjs/toolkit`中就使用了`immer`作为依赖库, 现在要做的就是把每次`produce` (`createSlice`中实现`reducer`的核心)生成的`patches`与`inversePatches`成对的保存在一条记录里作为历史. -->
 
 #### 设计命令注册方法
 
-从现有的项目出发, 用户的操作会带来数据上的改变, 但不是所有的操作都需要历史记录, 就像`PhotoShop`那样, 有时候打开了画板, 是不需要记录到历史的, 而那些编辑了/操作了图层的动作才是需要记录的, 所以这里就需要将记录`patch`的控制权开放给上层应用, 这样才能够有选择的记录补丁.
+从现有的项目出发, 用户的操作会带来数据上的改变, 但不是所有的操作都需要历史记录, 就像`PhotoShop`那样, 有时候打开了画板, 是不需要记录到历史的, 而那些编辑了/操作了图层的动作才是需要记录的, 所以这里就需要将记录`patches`的控制权开放给上层应用, 这样才能够有选择的记录补丁.
 
 `redux`的核心是一个个`reducer`, 我们在定义这些`reducer`的过程中其实也是在向`redux`注册一个又一个的命令, 我们可以在复用这一块的注册行为的基础上去扩展以最终达到注册历史记录命令的目的. 对于单个`reducer`, `RTK`支持这样的写法:
 
@@ -427,7 +436,7 @@ reducers: {
 在默认的`RTK`中, 并没有实现上述功能, 于是需要**修改源码**, 让`immer`在`reducer`执行时记录差分补丁. `immer`作用的区域是`createReducer.ts`这个文件, 首先需要在其引入模块部分开启补丁模式. 而`createReducer.ts`会被`createSlice.ts`文件引用,同时为了保证改造后的类型推断完整, `creatReducer.ts`中的类型涉及到文件也要修改,经排查只有`mapBuilders.ts`, 也会被`createSlice.ts`引用
 
 `RTK`的源码拆分比较灵活,我们可以通过实现自己的`createSlice`, `createReducer`等接口来替换原本的功能,做到最小程度的改动
-> 本文基于`@reduxjs/toolkit@1.8.6`版本进行改造(因为本文鸽了2年), 后续官方包的破坏性更新可能会导致不可用, 但源码的改造思路应该不会受到影响.
+> 本文基于`@reduxjs/toolkit@1.8.6`版本进行改造(~~因为本文鸽了2年~~), 后续官方包的破坏性更新可能会导致不可用, 但源码的改造思路应该不会受到影响.
 
 1. 首先从类型定义入手, 修改对应的配置类型标注让`ts`能正确推导, 原有的`reducers`配置定义存放在`createSlice.ts#L227`的`ValidateSliceCaseReducers`类型,
 
@@ -468,7 +477,7 @@ reducers: {
 
     ```
 
-2. 在`createSlice`解析配置时, 也要像`caseReducer`一样, 将所有的`patch`收集起来, 为了命名一致, 也叫它`casePatcher`. `CasePatcher`类型就是刚刚定义的`patch`方法类型, 并且在接下来解析`slice`中的`reducer`和`prepare`中额外添加记录`patch`的能力. 当然`Record<string,CasePatcher>`中的`key`也保持一致, 同为 ``${slice}/${actionKey}``
+2. 在`createSlice`解析配置时, 也要像`caseReducer`一样, 将所有的`patches`收集起来, 为了命名一致, 也叫它`casePatcher`. `CasePatcher`类型就是刚刚定义的`patch`方法类型, 并且在接下来解析`slice`中的`reducer`和`prepare`中额外添加记录`patch`的能力. 当然`Record<string,CasePatcher>`中的`key`也保持一致, 同为 ``${slice}/${actionKey}``
 
     ```diff
     /**
@@ -542,7 +551,7 @@ reducers: {
           reducer(state, action) {
             state.counter = state.counter + 1
           },
-          patch(patch, inversePatch, action) {
+          patch(patches, inversePatches, action) {
             // 补丁记录行为
           }
         }
@@ -559,8 +568,8 @@ reducers: {
 
 由于之前我们已经解读过`zundo`的历史记录实现的方式, 故原理不在多做赘述, 列出对比`zundo`快照实现的差异
 
-- `immer`产生的`pathes`需要按照顺序进行存储, 并且需要用一个值来记录当前的回退位置。
-  - 可以进一步将`patches`封装成一个闭包供`undo`和`redo`调用, 比起直接存`patch`数据, 底层实现逻辑代码会更清晰可读, 不过代价就是封装闭包的方法需要上层应用或者适配器来实现, **建议根据接入视图框架的方式来进行选择**.
+- `immer`产生的`patches`需要按照顺序进行存储, 并且需要用一个值来记录当前的回退位置。
+  - 可以进一步将`patches`封装成一个闭包供`undo`和`redo`调用, 比起直接存`patches`数据, 底层实现逻辑代码会更清晰可读, 不过代价就是封装闭包的方法需要上层应用或者适配器来实现, **建议根据接入视图框架的方式来进行选择**.
 - `zundo`没有对当前的状态记录, 也就是进入页面时, 列表为空, 可以默认携带一个类似“初始化页面”的操作记录用于更好的提示
 - 步进大于1的`timetravel`的情况, 差分模式需要依次走完完整的链路, 并不能像`zundo`那样使用双数组切分取值+拼接的形式, 所以这里使用单个数组+`currentIndex`的模式来实现
 
@@ -666,7 +675,7 @@ reducers: {
 
     在`zundo`中, 修改`store`的状态是通过闭包获取到`set`方法后, 可以在中间件内部拿到快照并直接操作外部`store`, 而`RTK`中即使是`middleware`能拦截的只有`getState`,`dispatch`和`action`, 因此需要一个专有的`reducer`来配合特定的`action`进行状态转移(应用补丁)
 
-    在构造`slice`时, 定义一个`applyRecord`(名字随意)的`reducer`, `payload`接收`patch[]`, 且通过`immer`提供的`applyPatches`来应用补丁. 每次`redo`/`unodo`, 最终都激活这个`applyRecord`的`reducer`, 把`patches`或`inversePatches`传给他完成状态补丁更新.
+    在构造`slice`时, 定义一个`applyRecord`(名字随意)的`reducer`, `payload`接收`Patch[]`, 且通过`immer`提供的`applyPatches`来应用补丁. 每次`redo`/`unodo`, 最终都激活这个`applyRecord`的`reducer`, 把`patches`或`inversePatches`传给他完成状态补丁更新.
 
     ```ts
     import { Patch, applyPatches } from 'immer';
@@ -688,7 +697,7 @@ reducers: {
   
     这一部分的功能主要聚焦于`react state`的更新方法对接, `undo`/`redo`等历史记录列表的方法暴露, 以及一些`react`环境下的功能优化
 
-   - **方式1** 一个常见的方法就是通过`react`组件 + 内部实例的方式进行生命周期与方法的暴露, 这里使用一个`abstract class`来抽象一些存在`store`副作用的方法, 保证组件与`store`解耦, 这样的设计是提升组件的通用性, 甚至可以开源出去, 让其他开发者的应用也能通过实现方法来接入自己的`redux store`.
+   - **方式1** 一个常见的方法就是通过`react`组件 + 内部实例的方式进行生命周期与方法的暴露, 这里使用一个`abstract class`来抽象一些存在`store`副作用的方法, 保证组件与`store`解耦, 这样的设计是提升组件的通用性, 并且为将来发布`npm`包预留了余地, 让其他开发者的应用也能通过实现方法来接入自己的`redux store`.
 
       ```ts
       abstract class UndoRedo extends React.Component {
@@ -705,11 +714,11 @@ reducers: {
         createRecord = (name:string, patches: Patch[], inversePatches: Patch[], actionType: string) => {
           const dispatch = this.getDispatch(actionType)
           const redo = () => {
-            // 这里的 `type` 就是上文 `applyRecord` `reducer`所需要的的`action`数据格式.
+            // 这里的 `type`为`xxx/applyRecord`, 即手动触发`applyRecord`应用补丁.
             dispatch({ type: actionType, payload: patches });
           };
           const undo = () => {
-            // 这里的 `type` 就是上文 `applyRecord` `reducer`所需要的的`action`数据格式.
+            // 这里的 `type`为`xxx/applyRecord`, 即手动触发`applyRecord`应用补丁.
             dispatch({ type: actionType, payload: inversePatches });
           };
           this._history.addRecord(name, redo, undo)
@@ -833,7 +842,7 @@ reducers: {
       ```
 
       **方法1**中用`batch`重写的`timeTravel`和`createRecord`方法也需要在这个方式下实现, 顺便吧`undo`和`redo`也一起实现了. 需要注意的是, 这里可以通过构造函数传入`getDispatch`方法来注入, 当然也可以像**方法1**一样使用`abstract class`.
-      > **方法1**中当然也可以直接把`getDispatch`作为构造参数传入, 不这么做的原因是, 作者习惯于将`react`的`props`开放给运行时需要响应式的变量, 而一些静态的参数则通过工厂, 类重写的方式, 让应用省去更新追踪响应式的过程(`memo`等).
+      > **方法1**中当然也可以直接把`getDispatch`作为构造参数传入, 不这么做的原因是, 作者习惯于将`react`的`props`开放给运行时需要响应式的变量, 而一些静态的参数则通过工厂, 类重写的方式, 在上层开发时就不用考虑这些参数的闭包问题, 可以放心大胆的写入`useMemo`之类的`hooks`, 并且 `eslint`的`exhaustive deps`也不会追踪这些变量并报错了.
 
       ```ts
       class UndoRedoStore extends HistoryPool {
@@ -888,7 +897,7 @@ reducers: {
 
       ```
 
-    **两种方法相比较, 虽然思路相同, 但更推荐第二种方法, 实现的方法比较优雅. 也没有引入额外的`Context`**
+    **两种方法相比较, 虽然思路相同, 但更推荐第二种方法, 实现的方法比较优雅. 也没有引入额外的`Context`, 对接入状态的组件层级也没有要求**
 
 3. 将`RTK`回调入参传递给历史记录列表的`react`实现, 其实只需要直接将参数传入`createRecord`方法即可, 但是也是会存在上文提到循环引用的问题.
   
@@ -907,9 +916,9 @@ reducers: {
           reducer(state, action) {
             state.counter = state.counter + 1
           },
-          patch(patch, inversePatch, action) {
+          patch(patches, inversePatches, action) {
             // 这里就需要有`historyStore`的实例了
-            historyStore.createRecord("计数增加", patch, inversePatch, 'mySliceWithPatch/applyRecord')
+            historyStore.createRecord("计数增加", patches, inversePatches, 'mySliceWithPatch/applyRecord')
           }
         }
       }
@@ -934,12 +943,23 @@ reducers: {
     于是才引入了`historyRef`和`UndoRedo.interface`作转发, 修改`patch`中的方法调用为
 
     ```diff
-    patch(patch, inversePatch, action) {
-    - historyStore.createRecord("计数增加", patch, inversePatch)
-    + historyRef.current?.createRecord("计数增加", patch, inversePatch)
+    const historyRef = { current: null }
+    //....
+
+    /* 用`ref`定义`slice`*/
+    patch(patches, inversePatches, action) {
+    - historyStore.createRecord("计数增加", patches, inversePatch)
+    + historyRef.current?.createRecord("计数增加", patches, inversePatch)
       // 或者
-    + UndoRedo.interface?.createRecord("计数增加", patch, inversePatch)
+    + UndoRedo.interface?.createRecord("计数增加", patches, inversePatch)
     }
+
+    //...
+
+    const RTKStore = configureStore({ reducer: mySliceWithPatch.reducer })
+    const { store: historyStore, useSelector } = createHistoryStore(() => RTKStore.dispatch)
+    /*挂载实例到 `ref`*/
+    historyRef.current = historyStore
     ```
 
 4. DONE, 至此改造已经全部完成, 具体组件在应用中的使用可以通过`useSelector`或者`useContext`来获取历史记录的状态, 这里给出一个具体的应用组件实现方案, 完整的示例demo在[这里](https://stackblitz.com/edit/react-ts-3uqzdd)
@@ -983,6 +1003,22 @@ reducers: {
 
 ---
 
-### 拓展(挖坑)
+### 拓展与思考(挖坑)
 
-- [ ] **与`yjs`配合实现多人协同的撤销回退**
+文章篇幅有限还有一些点没有涉及到, 这里把作者想到的点先列出来
+
+- [ ] 如何使用存储`patches`的方式而非存储`redo`/`undo`回调的方式来实现历史命令记录实例, 有什么好处
+- [ ] 有没有更好的办法从根本上解决循环引用的问题. 例如让`RTK`支持如`zustand`的中间件模式, 这样历史记录列表可以在`RTK`内部完成实例化, 也不需要额外定义`applyRecord`的`reducer`了
+- [ ] 与`yjs`配合实现多人协同的撤销回退
+
+### 参考
+
+immer 文档: <https://immerjs.github.io/immer/>
+
+zustand 文档: <https://zustand-demo.pmnd.rs/>
+
+zundo 源码: <https://github.com/charkour/zundo>
+
+redux-toolkit 文档: <https://redux-toolkit.js.org/>
+
+Understanding useSyncExternalStore hook: <https://blog.saeloun.com/2021/12/30/react-18-useSyncExternalStore-api/#understanding-usesyncexternalstore-hook>
